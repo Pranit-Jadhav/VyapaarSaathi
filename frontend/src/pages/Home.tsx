@@ -28,6 +28,36 @@ export default function Home() {
 
   const netProfit = useMemo(() => summary.earned - summary.spent, [summary.earned, summary.spent]);
 
+  // Aggregate earnings for the last 7 days
+  const last7DaysData = useMemo(() => {
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - (6 - i));
+      return {
+        dateObj: d,
+        label: d.toLocaleDateString(undefined, { weekday: "short" }),
+        earned: 0,
+      };
+    });
+
+    entries.forEach((entry) => {
+      const entryDate = entry.entry_date ? new Date(entry.entry_date) : null;
+      if (!entryDate || Number.isNaN(entryDate.getTime())) return;
+      const earned = toNumber(entry.total_earned);
+
+      const matchingDay = days.find(
+        (d) =>
+          d.dateObj.getFullYear() === entryDate.getFullYear() &&
+          d.dateObj.getMonth() === entryDate.getMonth() &&
+          d.dateObj.getDate() === entryDate.getDate()
+      );
+      if (matchingDay) matchingDay.earned += earned;
+    });
+
+    const maxEarned = Math.max(...days.map((d) => d.earned), 100); // minimum scale 100
+    return { days, maxEarned };
+  }, [entries]);
+
   return (
     <div className="flex flex-col gap-6">
       <section className="grid gap-5 lg:grid-cols-3">
@@ -86,8 +116,25 @@ export default function Home() {
             </div>
             <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">+18% vs last week</span>
           </div>
-          <div className="mt-4 h-40 w-full rounded-2xl bg-gradient-to-b from-sky-100 to-white flex items-center justify-center text-slate-400 text-sm">
-            [Chart Placeholder]
+          <div className="mt-4 h-48 w-full rounded-2xl flex items-end justify-between bg-slate-50 border border-slate-100 p-4 pt-10 px-6 gap-2">
+            {last7DaysData.days.map((day, idx) => {
+              const heightPercent = Math.max((day.earned / last7DaysData.maxEarned) * 100, 2);
+              return (
+                <div key={idx} className="flex flex-col items-center gap-2 group relative w-full h-full justify-end">
+                  {/* Tooltip */}
+                  <div className="absolute -top-8 opacity-0 group-hover:opacity-100 transition whitespace-nowrap bg-slate-800 text-white text-xs px-2 py-1 rounded shadow-lg pointer-events-none z-10">
+                    {formatInr(day.earned)}
+                  </div>
+                  {/* Bar */}
+                  <div 
+                    className="w-full max-w-[40px] bg-gradient-to-t from-teal-500 to-emerald-400 rounded-t-sm transition-all duration-500 hover:brightness-110" 
+                    style={{ height: `${heightPercent}%` }}
+                  ></div>
+                  {/* Label */}
+                  <span className="text-[10px] sm:text-xs font-semibold text-slate-500">{day.label}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
 

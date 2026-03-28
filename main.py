@@ -140,7 +140,7 @@ def _legacy_entry_from_ledger(row: Dict[str, Any]) -> Dict[str, Any]:
 
     created_at = row.get("created_at")
     created_at_str = str(created_at) if created_at else ""
-    entry_date = created_at_str[:10] if len(created_at_str) >= 10 else created_at_str
+    entry_date = created_at_str  # full ISO timestamp so UI parses local timezone correctly
 
     return {
         "entry_date": entry_date,
@@ -204,9 +204,8 @@ def get_entries(vendor_id: str = "", limit: int = 7) -> Dict[str, Any]:
             if not normalized.startswith("whatsapp:"):
                 normalized = f"whatsapp:{normalized}"
             query = query.eq("phone", normalized)
-        elif incoming_identifier and _is_uuid(incoming_identifier):
-            # UUID vendor IDs from the web frontend → entries are stored with phone="web-client"
-            query = query.eq("phone", "web-client")
+        # When accessed from the web frontend (UUID vendor_id), show ALL entries
+        # (web-client + whatsapp) so the ledger is a complete view of the business.
 
         result = query.execute()
         entries = [_legacy_entry_from_ledger(row) for row in (result.data or [])]
@@ -252,8 +251,12 @@ async def record_voice_entry(
             if not extracted:
                 return {"detail": FALLBACK_RESPONSE, "transcript": transcript}
 
-            # Ensure phone/vendor identifier fits Supabase column limit (varchar(32)).
-            phone_identifier = (vendor_id.strip() or "web-client")[:32]
+            # Map web frontend UUIDs to a consistent phone identifier.
+            raw_id = vendor_id.strip()
+            if not raw_id or _is_uuid(raw_id):
+                phone_identifier = "web-client"
+            else:
+                phone_identifier = raw_id[:32]
 
             # Save ALL extracted entries (income + expense as separate rows)
             total_earned = 0.0
@@ -290,7 +293,7 @@ async def record_voice_entry(
                     "total_spent": total_spent,
                     "items_sold": items_sold,
                     "expenses": expenses_list,
-                    "entry_date": last_saved.get("created_at", "")[:10] if last_saved.get("created_at") else "",
+                    "entry_date": str(last_saved.get("created_at", "")),
                 },
                 "current_profit": current_profit,
             }
@@ -371,8 +374,7 @@ def get_insights(vendor_id: str = "", refresh: bool = False) -> Dict[str, Any]:
         if _is_phone_identifier(incoming):
             normalized = incoming if incoming.startswith("whatsapp:") else f"whatsapp:{incoming}"
             query = query.eq("phone", normalized)
-        elif incoming and _is_uuid(incoming):
-            query = query.eq("phone", "web-client")
+        # UUID / web frontend: no phone filter → show all entries
 
         result = query.execute()
         rows = result.data or []
@@ -482,8 +484,7 @@ def get_suggestions(vendor_id: str = "", refresh: bool = False) -> Dict[str, Any
         if _is_phone_identifier(incoming):
             normalized = incoming if incoming.startswith("whatsapp:") else f"whatsapp:{incoming}"
             query = query.eq("phone", normalized)
-        elif incoming and _is_uuid(incoming):
-            query = query.eq("phone", "web-client")
+        # UUID / web frontend: no phone filter → show all entries
 
         result = query.execute()
         rows = result.data or []
