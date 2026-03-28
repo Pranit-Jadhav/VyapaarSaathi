@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VoiceTrace | Daily Business Helper</title>
+  <link rel="stylesheet" href="/web/styles.css" />
+</head>
+<body>
+  <main class="container">
+    <section class="header">
+      <h1>VoiceTrace</h1>
+      <p class="subtitle">
+        Simple daily business recording for street vendors. Speak your day summary,
+        and check entries, insights, and stock suggestions from the backend.
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>1. Vendor</h2>
+      <label for="vendorId">Vendor ID</label>
+      <input id="vendorId" type="text" value="123e4567-e89b-12d3-a456-426614174000" />
+    </section>
+
+    <section class="card">
+      <h2>2. Record Voice Entry</h2>
+      <p>Press Start, speak clearly, then press Stop.</p>
+      <div class="row">
+        <button id="recordBtn">Start Recording</button>
+        <button id="stopBtn" class="stop" disabled>Stop Recording</button>
+      </div>
+      <div id="recordStatus" class="status"></div>
+    </section>
+
+    <section class="card">
+      <h2>3. Backend Checks</h2>
+      <div class="row">
+        <button id="healthBtn" class="secondary">Check Backend Health</button>
+        <button id="entriesBtn" class="secondary">Load Entries</button>
+        <button id="insightsBtn" class="secondary">Run Insights</button>
+        <button id="suggestBtn" class="secondary">Get Suggestions</button>
+      </div>
+      <div id="healthStatus" class="status"></div>
+    </section>
+
+    <section class="card">
+      <h2>4. Audio Result (Easy View)</h2>
+      <p>This section shows what the system understood from your recording.</p>
+      <div id="summaryBox" class="summary-box">
+        <p class="summary-line"><strong>Transcript:</strong> <span id="summaryTranscript">No recording yet</span></p>
+        <p class="summary-line"><strong>Total Earned:</strong> <span id="summaryEarned">-</span></p>
+        <p class="summary-line"><strong>Total Spent:</strong> <span id="summarySpent">-</span></p>
+        <p class="summary-line"><strong>Net Profit:</strong> <span id="summaryProfit">-</span></p>
+        <p class="summary-line"><strong>Items Sold:</strong> <span id="summaryItems">-</span></p>
+        <p class="summary-line"><strong>Expenses:</strong> <span id="summaryExpenses">-</span></p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Raw Output (Advanced)</h2>
+      <pre id="output">{
+  "message": "Run any action to see backend output"
+}</pre>
+    </section>
+  </main>
+
+  <script type="module" src="/web/main.js"></script>
+</body>
+</html>

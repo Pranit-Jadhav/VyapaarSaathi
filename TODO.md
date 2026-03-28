@@ -5,8 +5,8 @@
 ### Backend
 - [ ] **Supabase setup** – create project, run SQL for 5 tables, enable storage bucket, phone‑OTP auth, RLS, copy connection string. *(≈30 min)*
 - [ ] **FastAPI skeleton** – scaffold 7 empty endpoints (`/record`, `/entries`, `/insights`, `/suggestions`, `/score`, `/pdf`, `/confirm`), wire Supabase client, implement audio upload, deploy to Railway. *(≈1 h)*
-- [ ] **Sarvam AI transcription** – POST audio to Sarvam Saarika ASR (Hindi/Hinglish), parse transcript & language, add Whisper‑large‑v3 fallback (hi), store word‑level timestamps. *(≈1 h)*
-- [ ] **Claude extraction (MOST IMPORTANT)** – craft system prompt with 6 Hinglish few‑shot examples, call `claude‑3‑5‑sonnet` (temp 0), parse JSON (`items_sold`, `expenses`, `total_earned`, `total_spent`, `stockout_mentions`, `mood_indicator` + confidence), store in `daily_entries`. *(≈2 h)*
+- [ ] **Free transcription** – Use open‑source Whisper model locally for Hindi/Hinglish transcription, parse transcript & language, store word‑level timestamps. *(≈1 h)*
+- [ ] **Groq extraction (MOST IMPORTANT)** – craft system prompt with 6 Hinglish few‑shot examples, call `llama3-70b-8192` via Groq (temp 0), parse JSON (`items_sold`, `expenses`, `total_earned`, `total_spent`, `stockout_mentions`, `mood_indicator` + confidence), store in `daily_entries`. *(≈2 h)*
 
 ### Frontend
 - [ ] **React app scaffold** – Vite + React 18 + Tailwind, 4 routes (Home, Record, Ledger, Profile), i18n (`react‑i18next`), Supabase JS client, Zustand + React‑Query, deploy to Vercel, keep bundle < 200 KB gzipped. *(≈1 h)*
@@ -34,7 +34,7 @@
 
 ### Backend
 - [ ] **Loan readiness score** – compute 0‑100 score from 4 factors (income consistency, growth trend, expense control, data quality) using ≥ 14 days data, map to scheme thresholds (PM SVANidhi, MUDRA Shishu, state schemes). *(≈2 h)*
-- [ ] **Scheme matcher rules engine** – hard‑code 6 schemes, eligibility rules against vendor profile, Google Maps Places API for nearest bank/center, state from onboarding, manual quarterly updates. *(≈1 h)*
+- [ ] **Scheme matcher rules engine** – hard‑code 6 schemes, eligibility rules against vendor profile, OpenStreetMap Nominatim for nearest bank/center (free), state from onboarding, manual quarterly updates. *(≈1 h)*
 - [ ] **PDF data endpoint** – GET `/pdf` aggregates vendor’s `daily_entries`, returns structured JSON for frontend jsPDF, exclude flagged expenses, Indian number formatting. *(≈30 min)*
 
 ### Frontend
@@ -48,7 +48,7 @@
 ## Phase 4 — Winning Features (20‑28 h)
 
 ### Backend
-- [ ] **WhatsApp bot** – Twilio sandbox, FastAPI webhook, download audio from Twilio URL, run full pipeline (transcribe → extract → save), compose Hindi reply via Claude, end‑to‑end test on real phone. *(≈3 h)*
+- [ ] **WhatsApp bot** – Twilio sandbox (free tier), FastAPI webhook, download audio from Twilio URL, run full pipeline (transcribe → extract → save), compose Hindi reply via Claude, end‑to‑end test on real phone. *(≈3 h)*
 - [ ] **Audio timestamp storage** – store Whisper word‑level timestamps per `daily_entry`, map entities to timestamps, expose presigned URLs (90‑day expiry). *(≈1 h)*
 - [ ] **Festival calendar data** – hard‑code 20 major Indian festivals, category‑specific multipliers, 3‑day advance trigger, state‑specific festivals from onboarding. *(≈30 min)*
 - [ ] **Daily push reminder job** – store Web Push subscription per vendor, APScheduler job checks reminder time, sends push if today’s entry missing, updates streak counter. *(≈30 min)*

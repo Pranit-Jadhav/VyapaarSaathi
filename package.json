@@ -1,0 +1,12 @@
+{
+  "name": "vyapaarsaathi-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}

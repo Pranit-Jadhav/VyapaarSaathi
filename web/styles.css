@@ -1,0 +1,165 @@
+:root {
+  --text: #1f2937;
+  --muted: #4b5563;
+  --bg: #f5f7fb;
+  --panel: #ffffff;
+  --line: #d1d5db;
+  --primary: #0f766e;
+  --primary-dark: #0b5f58;
+  --danger: #b91c1c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 20px 14px 36px;
+}
+
+.header {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 14px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.6rem;
+}
+
+.subtitle {
+  margin-top: 8px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+
+.card h2 {
+  margin: 0 0 8px;
+  font-size: 1.1rem;
+}
+
+.card p {
+  margin: 0 0 10px;
+  color: var(--muted);
+}
+
+label {
+  display: block;
+  font-size: 0.95rem;
+  margin-bottom: 5px;
+}
+
+input {
+  width: 100%;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  font-size: 1rem;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+button {
+  border: none;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  background: var(--primary);
+  color: #fff;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--primary-dark);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+button.secondary {
+  background: #2563eb;
+}
+
+button.secondary:hover {
+  background: #1d4ed8;
+}
+
+button.stop {
+  background: var(--danger);
+}
+
+button.stop:hover {
+  background: #991b1b;
+}
+
+.status {
+  margin-top: 10px;
+  font-size: 0.92rem;
+  color: var(--muted);
+  min-height: 22px;
+}
+
+.summary-box {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fafb;
+  padding: 10px 12px;
+}
+
+.summary-line {
+  margin: 0 0 8px;
+  line-height: 1.4;
+}
+
+.summary-line:last-child {
+  margin-bottom: 0;
+}
+
+pre {
+  margin: 0;
+  background: #f9fafb;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  overflow: auto;
+  max-height: 360px;
+  font-size: 0.86rem;
+}
+
+@media (max-width: 600px) {
+  .container {
+    padding: 12px 10px 28px;
+  }
+
+  button {
+    width: 100%;
+  }
+}
