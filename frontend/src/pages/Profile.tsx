@@ -1,7 +1,8 @@
 import { useStore } from "../store/useStore";
+import { generatePnLPDF } from "../utils/generatePDF";
 
 export default function Profile() {
-  const { vendorId, setVendorId, checkHealth, healthStatus, loading, language, setLanguage } = useStore();
+  const { vendorId, setVendorId, checkHealth, healthStatus, loading, language, setLanguage, entries, userName } = useStore();
   const isHindi = language === "hi";
 
   return (
@@ -62,7 +63,16 @@ export default function Profile() {
                 <p className="text-sm font-semibold text-slate-700">{isHindi ? "रिपोर्ट डाउनलोड" : "Export Report"}</p>
                 <p className="text-xs font-medium text-slate-500">{isHindi ? "सभी लेन-देन का PDF प्राप्त करें" : "Download PDF of all transactions"}</p>
              </div>
-             <button className="text-xs font-bold text-slate-600 hover:text-slate-800 uppercase tracking-widest px-3 py-1.5 rounded-lg border border-slate-300 bg-white shadow-sm">
+             <button 
+               onClick={() => {
+                 if (!entries || entries.length === 0) {
+                   alert(isHindi ? "कोई लेन‑देन नहीं मिला" : "No entries to export");
+                   return;
+                 }
+                 generatePnLPDF(entries, userName);
+               }}
+               className="text-xs font-bold text-slate-600 hover:text-slate-800 uppercase tracking-widest px-3 py-1.5 rounded-lg border border-slate-300 bg-white shadow-sm"
+             >
                {isHindi ? "डाउनलोड" : "Export"}
              </button>
            </div>

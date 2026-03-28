@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useStore, formatInr, toNumber, toItemSummary, formatDate, isSameDay, isSameWeek } from "../store/useStore";
+import { generatePnLPDF } from "../utils/generatePDF";
 
 const ledgerTabs = [
   { id: "All", en: "All", hi: "सभी" },
@@ -11,7 +12,7 @@ const ledgerTabs = [
 ] as const;
 
 export default function Ledger() {
-  const { entries, ledgerTab, setLedgerTab, language } = useStore();
+  const { entries, ledgerTab, setLedgerTab, language, userName } = useStore();
   const isHindi = language === "hi";
 
   const filteredEntries = useMemo(() => {
@@ -43,7 +44,11 @@ export default function Ledger() {
           <h2 className="text-xl font-bold text-slate-800">{isHindi ? "खाता" : "Ledger"}</h2>
           <p className="text-xs text-slate-500">{entries.length} {isHindi ? "लेनदेन दर्ज हैं।" : "total entries recorded."}</p>
         </div>
-        <button type="button" className="rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+        <button 
+          type="button" 
+          onClick={() => generatePnLPDF(entries, userName)}
+          className="rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+        >
           {isHindi ? "डेटा डाउनलोड करें" : "Export Data"}
         </button>
       </div>
