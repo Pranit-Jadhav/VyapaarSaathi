@@ -1,4 +1,4 @@
-# VOICETRACE – TODO LIST
+# VyapaarSaathi – TODO LIST
 
 ## Phase 1 — Foundation (0‑6 h)
 
