@@ -7,9 +7,10 @@ pytest>=8.0.0
 httpx>=0.26.0
 ruff>=0.2.0
 groq>=0.8.0
-openai-whisper
 python-multipart>=0.0.9
 urllib3<2
 apscheduler>=3.10
 pytz
-webrtcvad
+requests>=2.31.0
+twilio>=9.0.0
+gTTS>=2.5.4

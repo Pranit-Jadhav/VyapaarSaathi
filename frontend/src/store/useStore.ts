@@ -99,8 +99,14 @@ export function isSameWeek(dateValue: Date, today: Date): boolean {
   return dateValue >= start && dateValue < end;
 }
 
+// In dev mode, leave empty so requests go through the Vite proxy (same-origin, no CORS).
+// The proxy in vite.config.js forwards /health, /record, /entries, etc. to port 8000.
+// Only set VITE_API_URL when the frontend is deployed separately from the backend.
+const API_BASE = import.meta.env.VITE_API_URL || "";
+
 async function fetchJson(path: string, options?: RequestInit): Promise<JsonObject> {
-  const response = await fetch(`${window.location.origin}${path}`, options);
+  const base = API_BASE || window.location.origin;
+  const response = await fetch(`${base}${path}`, options);
   const raw = await response.text();
   let data: JsonObject;
   try {

@@ -1,7 +1,9 @@
 -- VyapaarSaathi Supabase Schema
 
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
 -- 1. Vendors Table
-CREATE TABLE vendors (
+CREATE TABLE IF NOT EXISTS vendors (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     phone VARCHAR(20) UNIQUE NOT NULL,
     pin_hash VARCHAR(255),  -- For 4-digit PIN auth without email
@@ -13,7 +15,7 @@ CREATE TABLE vendors (
 );
 
 -- 2. Daily Entries Table
-CREATE TABLE daily_entries (
+CREATE TABLE IF NOT EXISTS daily_entries (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     vendor_id UUID REFERENCES vendors(id) ON DELETE CASCADE,
     entry_date DATE NOT NULL DEFAULT CURRENT_DATE,
@@ -33,7 +35,7 @@ CREATE TABLE daily_entries (
 );
 
 -- 3. Pending Confirmations Table (for low-confidence items)
-CREATE TABLE pending_confirmations (
+CREATE TABLE IF NOT EXISTS pending_confirmations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     vendor_id UUID REFERENCES vendors(id) ON DELETE CASCADE,
     entry_id UUID REFERENCES daily_entries(id) ON DELETE CASCADE,
@@ -46,7 +48,7 @@ CREATE TABLE pending_confirmations (
 
 -- 4. Vendor Insights Table
 -- Stores pattern cards, stock suggestions, and anomaly alerts per vendor per day
-CREATE TABLE vendor_insights (
+CREATE TABLE IF NOT EXISTS vendor_insights (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     vendor_id UUID REFERENCES vendors(id) ON DELETE CASCADE,
     insight_date DATE NOT NULL DEFAULT CURRENT_DATE,
@@ -58,7 +60,7 @@ CREATE TABLE vendor_insights (
 );
 
 -- 5. Audio Segments Table
-CREATE TABLE audio_segments (
+CREATE TABLE IF NOT EXISTS audio_segments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     vendor_id UUID REFERENCES vendors(id) ON DELETE CASCADE,
     entry_id UUID REFERENCES daily_entries(id) ON DELETE CASCADE,
@@ -80,3 +82,34 @@ ALTER TABLE audio_segments ENABLE ROW LEVEL SECURITY;
 
 -- If only the FastAPI backend accesses the DB using the Service Role Key, 
 -- RLS policies are bypassed. If frontend accesses Supabase too, add policies here.
+
+-- 6. WhatsApp Voice Ledger Table
+CREATE TABLE IF NOT EXISTS ledger (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    phone VARCHAR(32) NOT NULL,
+    amount DECIMAL(12, 2) NOT NULL CHECK (amount > 0),
+    type VARCHAR(10) NOT NULL CHECK (type IN ('income', 'expense')),
+    category VARCHAR(100) NOT NULL,
+    description TEXT NOT NULL,
+    audio_url TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_phone_created_at
+    ON ledger (phone, created_at DESC);
+
+ALTER TABLE ledger ENABLE ROW LEVEL SECURITY;
+
+-- Realtime setup for frontend dashboard updates.
+ALTER TABLE ledger REPLICA IDENTITY FULL;
+
+DO $$
+BEGIN
+    BEGIN
+        ALTER PUBLICATION supabase_realtime ADD TABLE ledger;
+    EXCEPTION
+        WHEN duplicate_object THEN
+            NULL;
+    END;
+END;
+$$;
