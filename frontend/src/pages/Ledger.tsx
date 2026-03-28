@@ -1,10 +1,18 @@
 import { useMemo } from "react";
 import { useStore, formatInr, toNumber, toItemSummary, formatDate, isSameDay, isSameWeek } from "../store/useStore";
 
-const ledgerTabs = ["All", "Today", "This Week", "Profit Days", "Loss Days", "Flagged"] as const;
+const ledgerTabs = [
+  { id: "All", en: "All", hi: "सभी" },
+  { id: "Today", en: "Today", hi: "आज" },
+  { id: "This Week", en: "This Week", hi: "इस सप्ताह" },
+  { id: "Profit Days", en: "Profit Days", hi: "मुनाफे वाले दिन" },
+  { id: "Loss Days", en: "Loss Days", hi: "नुकसान वाले दिन" },
+  { id: "Flagged", en: "Flagged", hi: "फ़्लैग किए गए" }
+] as const;
 
 export default function Ledger() {
-  const { entries, ledgerTab, setLedgerTab } = useStore();
+  const { entries, ledgerTab, setLedgerTab, language } = useStore();
+  const isHindi = language === "hi";
 
   const filteredEntries = useMemo(() => {
     const today = new Date();
@@ -32,27 +40,27 @@ export default function Ledger() {
     <section className="rounded-3xl border border-slate-200 bg-white/80 p-6 shadow-lg flex-1">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-bold text-slate-800">Ledger</h2>
-          <p className="text-xs text-slate-500">{entries.length} total entries recorded.</p>
+          <h2 className="text-xl font-bold text-slate-800">{isHindi ? "खाता" : "Ledger"}</h2>
+          <p className="text-xs text-slate-500">{entries.length} {isHindi ? "लेनदेन दर्ज हैं।" : "total entries recorded."}</p>
         </div>
         <button type="button" className="rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">
-          Export Data
+          {isHindi ? "डेटा डाउनलोड करें" : "Export Data"}
         </button>
       </div>
       
       <div className="mt-4 flex flex-wrap gap-2">
         {ledgerTabs.map((tab) => (
           <button
-            key={tab}
+            key={tab.id}
             type="button"
-            onClick={() => setLedgerTab(tab)}
+            onClick={() => setLedgerTab(tab.id)}
             className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-              ledgerTab === tab 
+              ledgerTab === tab.id 
                 ? "bg-teal-500 text-white" 
                 : "border border-slate-200 text-slate-500 hover:bg-slate-50"
             }`}
           >
-            {tab}
+            {isHindi ? tab.hi : tab.en}
           </button>
         ))}
       </div>
@@ -60,7 +68,7 @@ export default function Ledger() {
       <div className="mt-5 space-y-3">
         {filteredEntries.length === 0 ? (
           <p className="text-sm text-slate-500 py-8 text-center bg-slate-50/50 rounded-2xl border border-dashed border-slate-300">
-            No entries found for this filter.
+            {isHindi ? "इस फ़िल्टर के लिए कोई लेनदेन नहीं मिला।" : "No entries found for this filter."}
           </p>
         ) : (
           filteredEntries.map((entry, idx) => {
@@ -83,11 +91,11 @@ export default function Ledger() {
                 <div className="mt-2 flex flex-wrap gap-4 text-xs text-slate-500">
                   <span className="flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                    Earned {formatInr(earned)}
+                    {isHindi ? "आय" : "Earned"} {formatInr(earned)}
                   </span>
                   <span className="flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-rose-400"></span>
-                    Spent {formatInr(spent)}
+                    {isHindi ? "व्यय" : "Spent"} {formatInr(spent)}
                   </span>
                 </div>
               </div>

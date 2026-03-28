@@ -38,6 +38,21 @@ function getInitialMode(): ThemeMode {
   return window.localStorage.getItem(MODE_STORAGE_KEY) === "night" ? "night" : "day";
 }
 
+function getInitialOnboarded(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem("vyapaarsaathi-onboarded") === "true";
+}
+
+function getInitialLanguage(): "en" | "hi" {
+  if (typeof window === "undefined") return "en";
+  return window.localStorage.getItem("vyapaarsaathi-language") === "hi" ? "hi" : "en";
+}
+
+function getInitialString(key: string, defaultVal: string = ""): string {
+  if (typeof window === "undefined") return defaultVal;
+  return window.localStorage.getItem(key) || defaultVal;
+}
+
 export function formatInr(value: number): string {
   return `Rs ${value.toFixed(0)}`;
 }
@@ -144,6 +159,17 @@ interface AppState {
   ledgerTab: string;
   setLedgerTab: (tab: string) => void;
 
+  hasOnboarded: boolean;
+  setHasOnboarded: (val: boolean) => void;
+  language: "en" | "hi";
+  setLanguage: (val: "en" | "hi") => void;
+  vendorType: string;
+  setVendorType: (val: string) => void;
+  userName: string;
+  setUserName: (val: string) => void;
+  pin: string;
+  setPin: (val: string) => void;
+
   checkHealth: () => Promise<void>;
   loadEntries: () => Promise<void>;
   runInsights: () => Promise<void>;
@@ -162,6 +188,32 @@ export const useStore = create<AppState>((set, get) => ({
   setMode: (mode) => {
     window.localStorage.setItem(MODE_STORAGE_KEY, mode);
     set({ mode });
+  },
+
+  hasOnboarded: getInitialOnboarded(),
+  setHasOnboarded: (val) => {
+    window.localStorage.setItem("vyapaarsaathi-onboarded", String(val));
+    set({ hasOnboarded: val });
+  },
+  language: getInitialLanguage(),
+  setLanguage: (val) => {
+    window.localStorage.setItem("vyapaarsaathi-language", val);
+    set({ language: val });
+  },
+  vendorType: getInitialString("vyapaarsaathi-vendortype", ""),
+  setVendorType: (val) => {
+    window.localStorage.setItem("vyapaarsaathi-vendortype", val);
+    set({ vendorType: val });
+  },
+  userName: getInitialString("vyapaarsaathi-username", ""),
+  setUserName: (val) => {
+    window.localStorage.setItem("vyapaarsaathi-username", val);
+    set({ userName: val });
+  },
+  pin: getInitialString("vyapaarsaathi-pin", ""),
+  setPin: (val) => {
+    window.localStorage.setItem("vyapaarsaathi-pin", val);
+    set({ pin: val });
   },
   vendorId: DEFAULT_VENDOR_ID,
   setVendorId: (id) => set({ vendorId: id }),
@@ -192,7 +244,7 @@ export const useStore = create<AppState>((set, get) => ({
     setHealthStatus("Checking API and database...");
     try {
       const api = await fetchJson("/health");
-      const entriesData = await fetchJson(`/entries?vendor_id=${encodeURIComponent(vendorId)}&limit=1`);
+      const entriesData = await fetchJson(`/entries?vendor_id=${encodeURIComponent(vendorId)}&limit=200`);
       
       const entriesList = Array.isArray(entriesData.entries) ? entriesData.entries : [];
       setEntries(entriesList as Entry[]);
@@ -218,7 +270,7 @@ export const useStore = create<AppState>((set, get) => ({
     const { vendorId, setLoading, setOutput, setEntries, setSummary } = get();
     setLoading("entries", true);
     try {
-      const data = await fetchJson(`/entries?vendor_id=${encodeURIComponent(vendorId)}&limit=7`);
+      const data = await fetchJson(`/entries?vendor_id=${encodeURIComponent(vendorId)}&limit=200`);
       setOutput(data);
       
       const entriesList = Array.isArray(data.entries) ? data.entries : [];
@@ -283,7 +335,7 @@ export const useStore = create<AppState>((set, get) => ({
       const entry = data.data;
       if (entry && typeof entry === "object" && !Array.isArray(entry)) {
         setSummary(summaryFromEntry(entry as JsonObject));
-        setEntries([entry as Entry, ...entries].slice(0, 7));
+        setEntries([entry as Entry, ...entries].slice(0, 200));
       }
       setRecordStatus("Entry saved successfully.");
     } catch (error) {

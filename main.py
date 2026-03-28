@@ -182,12 +182,12 @@ def health_check() -> Dict[str, Any]:
 
 
 @app.get("/entries")
-def get_entries(vendor_id: str = "", limit: int = 7) -> Dict[str, Any]:
+def get_entries(vendor_id: str = "", limit: int = 100) -> Dict[str, Any]:
     """
     Compatibility endpoint for existing frontend screens.
     Reads data from the `ledger` table and shapes it like legacy daily entries.
     """
-    safe_limit = max(1, min(limit, 100))
+    safe_limit = max(1, min(limit, 1000))
     supabase = get_supabase()
 
     try:
