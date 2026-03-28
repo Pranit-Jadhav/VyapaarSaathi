@@ -12,3 +12,4 @@ python-multipart>=0.0.9
 urllib3<2
 apscheduler>=3.10
 pytz
+webrtcvad
