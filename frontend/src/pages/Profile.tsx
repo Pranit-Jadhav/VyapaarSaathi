@@ -5,7 +5,7 @@ export default function Profile() {
   const isHindi = language === "hi";
 
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white/80 p-6 shadow-lg">
+    <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
       <h2 className="text-xl font-bold text-slate-800">{isHindi ? "अकाउंट और प्राथमिकताएं" : "Account & Preferences"}</h2>
       <p className="text-xs text-slate-500 mb-6">{isHindi ? "अपनी पहचान, डेटा और सेटिंग्स प्रबंधित करें।" : "Manage your identity, data, and settings."}</p>
       
@@ -41,7 +41,7 @@ export default function Profile() {
              </div>
              <button 
                onClick={() => setLanguage(isHindi ? "en" : "hi")}
-               className="text-xs font-bold text-teal-600 hover:text-teal-700 uppercase tracking-widest px-3 py-1.5 rounded-lg border border-teal-200 bg-teal-50"
+               className="text-xs font-bold text-slate-900 hover:text-slate-800 uppercase tracking-widest px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50"
              >
                {isHindi ? "बदलें" : "Change"}
              </button>
@@ -52,7 +52,7 @@ export default function Profile() {
                 <p className="text-sm font-semibold text-slate-700">{isHindi ? "दैनिक अनुस्मारक" : "Daily Reminders"}</p>
                 <p className="text-xs font-medium text-slate-500">{isHindi ? "रात 8 बजे अलर्ट" : "8:00 PM alert"}</p>
              </div>
-             <button className="text-xs font-bold text-teal-600 hover:text-teal-700 uppercase tracking-widest px-3 py-1.5 rounded-lg border border-teal-200 bg-teal-50">
+             <button className="text-xs font-bold text-slate-900 hover:text-slate-800 uppercase tracking-widest px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50">
                {isHindi ? "संपादित करें" : "Edit"}
              </button>
            </div>

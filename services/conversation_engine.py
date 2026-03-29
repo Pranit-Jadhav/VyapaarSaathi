@@ -372,17 +372,19 @@ def process_follow_up_answer(
             price_val = float(price)
             stock_val = int(float(daily_stock)) if daily_stock and float(daily_stock) > 0 else 50
 
-            # Create the inventory entry
+            # Create the inventory entry under 'web-client' so it appears in the
+            # shared catalog that the web UI and all WhatsApp users share.
+            inv_phone = phone if phone == "web-client" else "web-client"
             try:
                 from services.inventory import upsert_inventory_item
                 upsert_inventory_item(
-                    phone=phone,
+                    phone=inv_phone,
                     item_name=category,
                     daily_stock=stock_val,
                     unit="piece",
                     price_per_unit=price_val,
                 )
-                logger.info("Created inventory for '%s': ₹%.0f, stock=%d", category, price_val, stock_val)
+                logger.info("Created inventory for '%s' under '%s': ₹%.0f, stock=%d", category, inv_phone, price_val, stock_val)
             except Exception as exc:
                 logger.warning("Failed to create inventory for '%s': %s", category, exc)
 

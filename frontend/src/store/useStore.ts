@@ -402,6 +402,8 @@ export const useStore = create<AppState>((set, get) => ({
   uploadRecording: async (blob: Blob) => {
     const { vendorId, setRecordStatus, setOutput, setSummary, setEntries } = get();
     setRecordStatus("Uploading voice note...");
+    // Reset summary to blank while processing — don't show stale data
+    setSummary({ transcript: "Processing...", earned: 0, spent: 0, items: "-", expenses: "-" });
     const form = new FormData();
     form.append("audio", blob, "voice-entry.webm");
     form.append("vendor_id", vendorId.trim());

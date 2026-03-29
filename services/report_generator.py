@@ -66,17 +66,18 @@ def _fetch_all_data(phone: str) -> Dict[str, Any]:
     """
     Fetch all ledger entries and inventory data for the vendor.
     Returns a dict with structured financial data for the P&L statement.
+    Uses last 30 days to match the AI Insights date window exactly.
     """
     supabase = get_supabase()
     today = datetime.now(timezone.utc)
-    start_of_week = today - timedelta(days=today.weekday())
-    start_iso = start_of_week.replace(hour=0, minute=0, second=0).isoformat()
+    # Use same 30-day window as AI Insights so numbers always match
+    start_30d = today - timedelta(days=30)
+    start_iso = start_30d.replace(hour=0, minute=0, second=0).isoformat()
+    start_date = start_30d.date()
 
     # ── Ledger entries ────────────────────────────────────────────────────────
     entries = []
-    
-    # If requested from the generic web-client, fetch all ledger data so that it matches
-    # the frontend dashboard view. Otherwise, fetch both specific WhatsApp data AND web-client data.
+
     if phone == "web-client":
         result = (
             supabase.table(LEDGER)
@@ -88,8 +89,6 @@ def _fetch_all_data(phone: str) -> Dict[str, Any]:
         if result.data:
             entries = result.data
     else:
-        # User requested from WhatsApp. They want to see BOTH Their WhatsApp entries
-        # AND any entries they made on the Web Interface ("web-client").
         phones_to_fetch = [phone, "web-client"]
         result = (
             supabase.table(LEDGER)
@@ -178,7 +177,7 @@ def _fetch_all_data(phone: str) -> Dict[str, Any]:
         "opening_stock": opening_stock,
         "closing_stock": closing_stock,
         "inventory": inv_rows,
-        "start_date": start_of_week.date(),
+        "start_date": start_date,
         "end_date": date.today(),
     }
 
@@ -322,24 +321,30 @@ def generate_pnl_pdf(phone: str, vendor_name: str = "Vendor") -> Optional[str]:
     start_date = data["start_date"]
     end_date = data["end_date"]
 
-    # ── Compute Trading Account ───────────────────────────────────────────────
-    # Debit side: Opening Stock + Purchases + Gross Profit = Credit total
-    # Credit side: Sales + Closing Stock
+    # ── Core Numbers ─────────────────────────────────────────────────────────
+    # Trading Account gross profit (stock-adjusted):
+    #   Credit side: Sales + Closing Stock
+    #   Debit side:  Opening Stock + Purchases + Gross Profit  → must balance
     credit_total_trading = total_sales + closing_stock
-    gross_profit = credit_total_trading - opening_stock - total_purchases
-    if gross_profit < 0:
-        gross_profit = 0  # Loss scenario handled below
-    debit_total_trading = opening_stock + total_purchases + gross_profit
-    # Both must balance
-    trading_balance = max(debit_total_trading, credit_total_trading)
+    debit_before_gp = opening_stock + total_purchases
+    gross_profit = credit_total_trading - debit_before_gp   # = Sales + Closing - Opening - Purchases
 
-    # ── Compute P&L Account ───────────────────────────────────────────────────
-    # In P&L section: individual expense categories as indirect expenses
-    # For a street vendor, all expenses go here
-    total_indirect_expenses = sum(expense_by_cat.values())
-    net_profit = gross_profit - total_indirect_expenses
-    # Balance the P&L account
-    pnl_balance = max(gross_profit, total_indirect_expenses + max(net_profit, 0))
+    if gross_profit < 0:
+        gross_loss = abs(gross_profit)
+        gross_profit = 0.0
+    else:
+        gross_loss = 0.0
+
+    # Trading account total (both sides must equal this):
+    trading_balance = credit_total_trading  # Sales + Closing Stock
+
+    # ── P&L Account ──────────────────────────────────────────────────────────
+    # The P&L account receives "By Gross Profit b/d" from Trading Account.
+    # Since all expenses are captured as "Purchases" in Trading Account,
+    # there are NO indirect expenses in P&L.
+    # Therefore: Net Profit = Gross Profit  (P&L balances exactly)
+    net_profit_pnl = gross_profit   # what appears in both P&L columns
+    pnl_balance = gross_profit      # both sides of P&L = gross_profit
 
     # Clean vendor name
     display_name = vendor_name or "VENDOR"
@@ -426,42 +431,31 @@ def generate_pnl_pdf(phone: str, vendor_name: str = "Vendor") -> Optional[str]:
     y = pdf._draw_column_headers(y)
     pnl_body_start_y = y
 
-    # LEFT (Debit): Individual expense categories + Net Profit
+    # LEFT (Debit): Net Profit (or nothing if net loss)
     left_y = y
 
-    # List each expense category
-    for cat_name, cat_amt in sorted(expense_by_cat.items()):
+    if net_profit_pnl >= 0:
+        # Net Profit on debit side (standard format)
         left_y = pdf._draw_row(left_y,
-                               left_label=f"To {cat_name}",
-                               left_amt=_fmt_inr(cat_amt))
-
-    # If no expenses at all
-    if not expense_by_cat:
-        left_y = pdf._draw_row(left_y,
-                               left_label="To Expenses",
-                               left_amt=_fmt_inr(0))
-
-    # Net Profit (bold amount)
-    if net_profit >= 0:
-        left_y = pdf._draw_row(left_y,
-                               left_label="To Net Profit",
-                               left_amt=_fmt_inr(net_profit),
+                               left_label="To Net Profit c/d",
+                               left_amt=_fmt_inr(net_profit_pnl),
                                left_bold_amt=True)
     else:
-        # Net Loss goes on the right side
-        pass
+        left_y = pdf._draw_row(left_y,
+                               left_label="(Net Loss)",
+                               left_amt=_fmt_inr(0))
 
-    # RIGHT (Credit): By Gross Profit, possibly By Net Loss
+    # RIGHT (Credit): By Gross Profit b/d
     right_y = y
     right_y = pdf._draw_row(right_y,
-                            right_label="By Gross Profit",
-                            right_amt=_fmt_inr(gross_profit))
+                            right_label="By Gross Profit b/d",
+                            right_amt=_fmt_inr(gross_profit),
+                            right_bold_amt=True)
 
-    if net_profit < 0:
-        # Net loss on credit side
+    if net_profit_pnl < 0:
         right_y = pdf._draw_row(right_y,
                                 right_label="By Net Loss",
-                                right_amt=_fmt_inr(abs(net_profit)),
+                                right_amt=_fmt_inr(abs(net_profit_pnl)),
                                 right_bold_amt=True)
 
     # Align both sides
@@ -470,7 +464,7 @@ def generate_pnl_pdf(phone: str, vendor_name: str = "Vendor") -> Optional[str]:
     # Separator
     max_y = pdf._draw_separator_rule(max_y)
 
-    # TOTAL ROW (P&L Account)
+    # TOTAL ROW (P&L Account) — both sides = gross_profit
     max_y = pdf._draw_row(max_y,
                           left_amt=_fmt_inr(pnl_balance),
                           right_amt=_fmt_inr(pnl_balance),

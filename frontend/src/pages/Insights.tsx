@@ -119,26 +119,26 @@ function DualAudioPlayer({
   }
 
   return (
-    <div className="rounded-2xl border border-indigo-200 bg-gradient-to-r from-indigo-50 via-violet-50 to-purple-50 p-5 shadow-sm">
+    <div className="rounded-2xl border border-slate-200 bg-gradient-to-r sky-50 p-5 shadow-sm">
       {audioSrc && <audio ref={audioRef} src={audioSrc} preload="auto" key={audioLang} />}
 
       {/* Header with language toggle */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
-          <p className="text-xs font-bold uppercase tracking-wider text-indigo-700">
+          <span className="w-2 h-2 rounded-full bg-sky-500 animate-pulse" />
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-800">
             🔊 {isHindi ? "AI ऑडियो समरी" : "AI Audio Summary"}
           </p>
         </div>
         {/* Language Toggle */}
-        <div className="flex rounded-full bg-white border border-indigo-200 p-0.5 shadow-sm">
+        <div className="flex rounded-full bg-white border border-slate-200 p-0.5 shadow-sm">
           <button
             onClick={() => switchLang("hi")}
             disabled={!hasHi}
             className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
               audioLang === "hi"
-                ? "bg-indigo-500 text-white shadow"
-                : "text-slate-500 hover:text-indigo-600 disabled:opacity-30"
+                ? "bg-sky-500 text-white shadow"
+                : "text-slate-500 hover:text-slate-900 disabled:opacity-30"
             }`}
           >
             🇮🇳 हिंदी
@@ -148,8 +148,8 @@ function DualAudioPlayer({
             disabled={!hasEn}
             className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
               audioLang === "en"
-                ? "bg-indigo-500 text-white shadow"
-                : "text-slate-500 hover:text-indigo-600 disabled:opacity-30"
+                ? "bg-sky-500 text-white shadow"
+                : "text-slate-500 hover:text-slate-900 disabled:opacity-30"
             }`}
           >
             🇬🇧 English
@@ -180,9 +180,9 @@ function DualAudioPlayer({
       </div>
 
       {/* Progress Bar */}
-      <div className="h-1.5 rounded-full bg-indigo-100 mb-3 overflow-hidden">
+      <div className="h-1.5 rounded-full bg-slate-100 mb-3 overflow-hidden">
         <div
-          className="h-full rounded-full bg-indigo-500 transition-all duration-300"
+          className="h-full rounded-full bg-sky-500 transition-all duration-300"
           style={{ width: `${progress}%` }}
         />
       </div>
@@ -191,7 +191,7 @@ function DualAudioPlayer({
       <button
         onClick={togglePlay}
         disabled={!audioSrc}
-        className="w-full rounded-xl bg-indigo-500 py-2.5 text-sm font-semibold text-white shadow hover:bg-indigo-600 transition flex items-center justify-center gap-2 disabled:opacity-50"
+        className="w-full rounded-xl bg-sky-500 py-2.5 text-sm font-semibold text-white shadow hover:bg-sky-600 transition flex items-center justify-center gap-2 disabled:opacity-50"
       >
         {isPlaying ? (
           <>⏸ {isHindi ? "रोकें" : "Pause"}</>
@@ -210,14 +210,14 @@ function CategoryChart({ data, isHindi }: { data: CategoryBreakdown[]; isHindi: 
 
   const colors = [
     "bg-emerald-500", "bg-sky-500", "bg-violet-500", "bg-amber-500",
-    "bg-rose-500", "bg-teal-500", "bg-indigo-500", "bg-pink-500",
+    "bg-rose-500", "bg-sky-500", "bg-sky-500", "bg-pink-500",
   ];
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex items-center gap-2 mb-4">
         <span className="w-2 h-2 rounded-full bg-emerald-500" />
-        <p className="text-xs font-bold uppercase tracking-wider text-slate-700">
+        <p className="text-xs font-bold uppercase tracking-wider text-slate-800">
           {isHindi ? "📊 कैटेगरी विश्लेषण" : "📊 Category Breakdown"}
         </p>
       </div>
@@ -225,7 +225,7 @@ function CategoryChart({ data, isHindi }: { data: CategoryBreakdown[]; isHindi: 
         {data.map((cat, idx) => (
           <div key={cat.name}>
             <div className="flex items-center justify-between text-xs mb-1">
-              <span className="font-semibold text-slate-700 capitalize">{cat.name}</span>
+              <span className="font-semibold text-slate-800 capitalize">{cat.name}</span>
               <span className="text-slate-500">₹{cat.amount} · {cat.percentage}%</span>
             </div>
             <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden">
@@ -296,7 +296,7 @@ function RecommendationItem({ rec, index, isHindi }: { rec: AIRecommendation; in
         {index + 1}
       </span>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-slate-700 leading-relaxed">
+        <p className="text-sm font-medium text-slate-800 leading-relaxed">
           {isHindi ? rec.text_hi : rec.text_en}
         </p>
       </div>
@@ -312,15 +312,15 @@ function LoadingSkeleton({ phase }: { phase: string }) {
   return (
     <div className="flex flex-col items-center justify-center py-20">
       <div className="relative">
-        <div className="w-20 h-20 rounded-full border-4 border-indigo-200 animate-ping absolute inset-0 opacity-30" />
-        <div className="w-20 h-20 rounded-full border-4 border-t-indigo-500 border-r-indigo-300 border-b-indigo-100 border-l-transparent animate-spin" />
+        <div className="w-20 h-20 rounded-full border-4 border-slate-200 animate-ping absolute inset-0 opacity-30" />
+        <div className="w-20 h-20 rounded-full border-4 border-t-sky-500 border-r-sky-300 border-b-sky-100 border-l-transparent animate-spin" />
       </div>
       <p className="mt-6 text-sm font-semibold text-slate-600 animate-pulse">{phase}</p>
       <div className="mt-3 flex gap-1">
         {[0, 1, 2].map(i => (
           <div
             key={i}
-            className="w-2 h-2 rounded-full bg-indigo-400"
+            className="w-2 h-2 rounded-full bg-sky-400"
             style={{ animation: `bounce 1s ease-in-out ${i * 0.15}s infinite` }}
           />
         ))}
@@ -350,11 +350,11 @@ export default function Insights() {
       `}</style>
 
       {/* ── Header ──────────────────────────────────────────────────────── */}
-      <div className="rounded-3xl border border-slate-200 bg-white/80 p-6 shadow-lg">
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-              <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-sm text-white shadow">✦</span>
+              <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 to-cyan-500 text-sm text-white shadow">✦</span>
               {isHindi ? "AI बिज़नेस सलाहकार" : "AI Business Advisor"}
             </h2>
             <p className="text-xs text-slate-500 mt-1">
@@ -367,7 +367,7 @@ export default function Insights() {
             type="button"
             onClick={runAIInsights}
             disabled={isLoading}
-            className="rounded-full bg-gradient-to-r from-indigo-500 to-violet-600 px-6 py-2.5 text-sm font-semibold text-white shadow-lg transition hover:shadow-xl hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            className="rounded-full bg-gradient-to-r from-sky-500 to-cyan-500 px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:shadow-xl hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             {isLoading ? (
               <>
@@ -413,7 +413,7 @@ export default function Insights() {
                   {
                     label: isHindi ? "शुद्ध लाभ" : "Net Profit",
                     value: `₹${aiInsights.metrics.net_profit ?? 0}`,
-                    color: "text-indigo-600",
+                    color: "text-slate-900",
                   },
                 ].map((m) => (
                   <div key={m.label} className="text-center">
@@ -433,14 +433,14 @@ export default function Insights() {
               />
 
               {/* Narrative Text */}
-              <div className="rounded-2xl border border-indigo-100 bg-gradient-to-br from-white to-indigo-50/50 p-5 shadow-sm">
+              <div className="rounded-2xl border border-sky-100 bg-gradient-to-br from-white to-sky-50/50 p-5 shadow-sm">
                 <div className="flex items-center gap-2 mb-3">
-                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-indigo-500 text-[10px] text-white font-bold animate-pulse">AI</span>
-                  <p className="text-xs font-bold uppercase tracking-wider text-indigo-700">
+                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-sky-500 text-[10px] text-white font-bold animate-pulse">AI</span>
+                  <p className="text-xs font-bold uppercase tracking-wider text-slate-800">
                     {isHindi ? "सारांश" : "Summary"}
                   </p>
                 </div>
-                <p className="text-sm font-medium text-slate-700 leading-relaxed">
+                <p className="text-sm font-medium text-slate-800 leading-relaxed">
                   {isHindi ? aiInsights.narrative_hi : aiInsights.narrative_en}
                 </p>
               </div>
@@ -450,7 +450,7 @@ export default function Insights() {
           {/* Row 2: Key Findings */}
           {aiInsights.key_findings.length > 0 && (
             <div>
-              <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+              <h3 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
                 <span className="text-base">🔍</span>
                 {isHindi ? "मुख्य निष्कर्ष" : "Key Findings"}
               </h3>
@@ -470,7 +470,7 @@ export default function Insights() {
 
             {aiInsights.recommendations.length > 0 && (
               <div>
-                <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+                <h3 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
                   <span className="text-base">💡</span>
                   {isHindi ? "सुझाव और कार्रवाई" : "Recommendations"}
                 </h3>
@@ -521,9 +521,9 @@ export default function Insights() {
 
       {/* ── Empty State ─────────────────────────────────────────────────── */}
       {!isLoading && !aiInsights && (
-        <div className="rounded-3xl border border-slate-200 bg-white/80 p-12 shadow text-center">
+        <div className="rounded-2xl border border-slate-200 bg-white p-12 shadow text-center">
           <div className="text-5xl mb-4">🧠</div>
-          <p className="font-bold text-slate-700 text-base">
+          <p className="font-bold text-slate-800 text-base">
             {isHindi ? "अभी तक कोई विश्लेषण नहीं" : "No analysis yet"}
           </p>
           <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
@@ -534,7 +534,7 @@ export default function Insights() {
           <button
             onClick={runAIInsights}
             disabled={isLoading}
-            className="mt-6 rounded-full bg-gradient-to-r from-indigo-500 to-violet-600 px-8 py-3 text-sm font-bold text-white shadow-lg hover:shadow-xl hover:brightness-110 transition"
+            className="mt-6 rounded-full bg-gradient-to-r from-sky-500 to-cyan-500 px-8 py-3 text-sm font-bold text-white shadow-sm hover:shadow-xl hover:brightness-110 transition"
           >
             🧠 {isHindi ? "AI विश्लेषण शुरू करें" : "Start AI Analysis"}
           </button>

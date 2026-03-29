@@ -22,7 +22,7 @@ export default function Onboarding() {
   const bgCard = "bg-slate-50 border-slate-200";
   const textMuted = "text-slate-500";
   const tBtn = "bg-white hover:bg-slate-50 border border-slate-200 text-slate-800";
-  const tBtnActive = "bg-indigo-600/20 border border-indigo-500 text-indigo-400";
+  const tBtnActive = "bg-slate-900/20 border border-indigo-500 text-slate-400";
 
   const handleFinish = () => {
     if (!userName.trim() || pin.length < 4) return;
@@ -39,7 +39,7 @@ export default function Onboarding() {
         {/* Step Indicator */}
         <div className="mb-6 flex items-center justify-center gap-2">
           {[1, 2, 3].map((s) => (
-            <div key={s} className={`h-1.5 rounded-full transition-all ${s === step ? "w-8 bg-indigo-500" : s < step ? "w-4 bg-indigo-500/50" : isNight ? "w-4 bg-[#333]" : "w-4 bg-slate-200"}`} />
+            <div key={s} className={`h-1.5 rounded-full transition-all ${s === step ? "w-8 bg-slate-700" : s < step ? "w-4 bg-slate-700/50" : isNight ? "w-4 bg-[#333]" : "w-4 bg-slate-200"}`} />
           ))}
         </div>
 
@@ -77,7 +77,7 @@ export default function Onboarding() {
         {step === 2 && (
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="mb-6">
-              <button onClick={() => setStep(1)} className={`mb-4 text-sm font-semibold transition hover:text-indigo-500 ${textMuted}`}>
+              <button onClick={() => setStep(1)} className={`mb-4 text-sm font-semibold transition hover:text-slate-600 ${textMuted}`}>
                 ← Back
               </button>
               <h1 className="text-2xl font-bold mb-2">
@@ -98,7 +98,7 @@ export default function Onboarding() {
                       onClick={() => setVendorType(type)}
                       className={`rounded-full px-5 py-2 text-sm font-semibold transition-all ${
                         isActive 
-                          ? "bg-indigo-500 text-white shadow-md scale-105" 
+                          ? "bg-slate-700 text-white shadow-md scale-105" 
                           : isNight 
                             ? "bg-[#333] hover:bg-[#444] text-slate-300" 
                             : "bg-white hover:bg-slate-100 border border-slate-200 text-slate-700"
@@ -114,7 +114,7 @@ export default function Onboarding() {
             <button 
               onClick={() => setStep(3)}
               disabled={!vendorType}
-              className="mt-6 w-full rounded-2xl bg-indigo-500 py-4 text-sm font-bold text-white shadow-lg transition hover:bg-indigo-600 disabled:opacity-50 disabled:hover:bg-indigo-500"
+              className="mt-6 w-full rounded-2xl bg-slate-700 py-4 text-sm font-bold text-white shadow-lg transition hover:bg-slate-900 disabled:opacity-50 disabled:hover:bg-slate-700"
             >
               {isHindi ? "जारी रखें" : "Continue"}
             </button>
@@ -125,7 +125,7 @@ export default function Onboarding() {
         {step === 3 && (
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="mb-6">
-              <button onClick={() => setStep(2)} className={`mb-4 text-sm font-semibold transition hover:text-indigo-500 ${textMuted}`}>
+              <button onClick={() => setStep(2)} className={`mb-4 text-sm font-semibold transition hover:text-slate-600 ${textMuted}`}>
                 ← Back
               </button>
               <h1 className="text-2xl font-bold mb-2">
@@ -185,7 +185,7 @@ export default function Onboarding() {
             <button 
               onClick={handleFinish}
               disabled={!userName.trim() || pin.length < 4}
-              className="mt-6 w-full rounded-2xl bg-teal-500 py-4 text-sm font-bold text-white shadow-lg transition hover:bg-teal-600 disabled:opacity-50 disabled:hover:bg-teal-500"
+              className="mt-6 w-full rounded-2xl bg-sky-500 py-4 text-sm font-bold text-white shadow-lg transition hover:bg-sky-600 disabled:opacity-50 disabled:hover:bg-sky-500"
             >
               {isHindi ? "सहेजें और शुरू करें" : "Save & Open Ledger"}
             </button>

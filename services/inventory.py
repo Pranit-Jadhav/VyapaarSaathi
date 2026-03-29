@@ -75,16 +75,18 @@ def get_inventory(phone: str) -> List[Dict[str, Any]]:
     manual_items: Dict[str, Dict[str, Any]] = {r["item_name"]: r for r in manual_rows}
 
     # ── Source 2: Voice-detected items from ledger (last 30 days) ────────────
-    ledger_rows = (
+    ledger_query = (
         supabase.table(LEDGER)
         .select("category,quantity,amount,created_at")
-        .eq("phone", phone)
         .eq("type", "income")
         .gte("created_at", cutoff_30d)
         .order("created_at", desc=False)
         .limit(1000)
-        .execute()
-    ).data or []
+    )
+    if phone != "web-client":
+        ledger_query = ledger_query.eq("phone", phone)
+        
+    ledger_rows = ledger_query.execute().data or []
 
     # Aggregate by item: total qty sold today, total ever, avg
     item_today_qty: Dict[str, float] = defaultdict(float)

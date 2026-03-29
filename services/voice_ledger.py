@@ -366,9 +366,13 @@ def _calculate_current_profit(phone: str) -> float:
     return profit
 
 
-def save_to_db(phone: str, extracted_data: Dict[str, Any], audio_url: str) -> Dict[str, Any]:
-    """Save a single extracted entry. extracted_data is a single entry dict."""
+def save_to_db(phone: str, extracted_data: Dict[str, Any], audio_url: str, catalog_phone: str = "") -> Dict[str, Any]:
+    """Save a single extracted entry. extracted_data is a single entry dict.
+    catalog_phone: the phone key used for inventory lookups (defaults to phone if not given).
+    Pass 'web-client' to make WhatsApp entries use the shared web-client catalog."""
     supabase = get_supabase()
+    # Use catalog_phone for inventory if provided, else fall back to phone
+    inv_phone = catalog_phone if catalog_phone else phone
 
     # Extract quantity if provided (may be None / missing)
     raw_qty = extracted_data.get("quantity")
@@ -392,7 +396,7 @@ def save_to_db(phone: str, extracted_data: Dict[str, Any], audio_url: str) -> Di
         # Look up price from inventory
         try:
             from services.inventory import get_inventory
-            inv_items = get_inventory(phone)
+            inv_items = get_inventory(inv_phone)
             cat_lower = str(extracted_data.get("category") or "").strip().lower()
             for inv_item in inv_items:
                 if inv_item.get("item_name") == cat_lower:
@@ -438,9 +442,9 @@ def save_to_db(phone: str, extracted_data: Dict[str, Any], audio_url: str) -> Di
         if deduct_qty is None and amount > 0 and category:
             try:
                 from services.inventory import get_inventory
-                inv_items = get_inventory(phone)
-                # Also check web-client if phone is different
-                if phone != "web-client" and not inv_items:
+                inv_items = get_inventory(inv_phone)
+                # Also check web-client if inv_phone is different
+                if inv_phone != "web-client" and not inv_items:
                     inv_items = get_inventory("web-client")
                 for inv_item in inv_items:
                     if inv_item.get("item_name") == category or \
@@ -459,7 +463,7 @@ def save_to_db(phone: str, extracted_data: Dict[str, Any], audio_url: str) -> Di
             try:
                 from services.inventory import deduct_stock
                 stockout_info = deduct_stock(
-                    phone=phone,
+                    phone=inv_phone,
                     item_name=category,
                     quantity=deduct_qty,
                 )
@@ -524,9 +528,14 @@ def process_voice_message(phone: str, media_url: str) -> str:
     if not extracted:
         return FALLBACK_RESPONSE
 
-    # Get inventory for conversation engine
+    # Get inventory for conversation engine.
+    # Always use the shared 'web-client' catalog so WhatsApp and web UI
+    # share the same items, prices and stock levels.
+    catalog_phone = "web-client"
     try:
-        inv_items = get_inventory(phone)
+        inv_items = get_inventory(catalog_phone)
+        if not inv_items:
+            inv_items = get_inventory(phone)
     except Exception:
         inv_items = []
 
@@ -548,8 +557,8 @@ def process_voice_message(phone: str, media_url: str) -> str:
             return f"🤖 {question}"
 
         if result["status"] == "complete":
-            # Save all entries
-            return _save_and_reply(phone, result.get("entries_to_save", []), media_url)
+            # Save all entries — use web-client as canonical phone so web UI sees them
+            return _save_and_reply(phone, result.get("entries_to_save", []), media_url, catalog_phone=catalog_phone)
 
     # ── Fresh message — analyze against inventory ────────────────────────
     # First handle GET_REPORT separately (not inventory-dependent)
@@ -578,15 +587,15 @@ def process_voice_message(phone: str, media_url: str) -> str:
     if analysis["status"] == "pending":
         # Send counter question — save any complete entries first
         if analysis.get("entries_to_save"):
-            _save_and_reply_silent(phone, analysis["entries_to_save"], media_url)
+            _save_and_reply_silent(phone, analysis["entries_to_save"], media_url, catalog_phone=catalog_phone)
         question = analysis.get("counter_question_hi", "")
         return f"🤖 {question}"
 
     # All complete — save everything
-    return _save_and_reply(phone, analysis.get("entries_to_save", []), media_url)
+    return _save_and_reply(phone, analysis.get("entries_to_save", []), media_url, catalog_phone=catalog_phone)
 
 
-def _save_and_reply(phone: str, entries: List[Dict[str, Any]], media_url: str) -> str:
+def _save_and_reply(phone: str, entries: List[Dict[str, Any]], media_url: str, catalog_phone: str = "web-client") -> str:
     """Save entries and build WhatsApp reply text."""
     total_income = 0.0
     total_expense = 0.0
@@ -606,7 +615,7 @@ def _save_and_reply(phone: str, entries: List[Dict[str, Any]], media_url: str) -
             if cat and qty > 0:
                 try:
                     from services.inventory import upsert_inventory_item
-                    upsert_inventory_item(phone=phone, item_name=cat, daily_stock=qty, unit=entry_data.get("unit", "piece"), add_stock=True)
+                    upsert_inventory_item(phone=catalog_phone, item_name=cat, daily_stock=qty, unit=entry_data.get("unit", "piece"), add_stock=True)
                     inventory_confirmations.append(f"📦 {cat} stock → {qty}")
                 except Exception as inv_exc:
                     logger.warning("STOCK_UPDATE failed '%s': %s", cat, inv_exc)
@@ -624,7 +633,7 @@ def _save_and_reply(phone: str, entries: List[Dict[str, Any]], media_url: str) -
                     _sb.table("inventory").update({
                         "price_per_unit": new_price,
                         "updated_at": datetime.now(timezone.utc).isoformat(),
-                    }).eq("phone", phone).eq("item_name", cat).eq("stock_date", date.today().isoformat()).execute()
+                    }).eq("phone", catalog_phone).eq("item_name", cat).eq("stock_date", date.today().isoformat()).execute()
                     inventory_confirmations.append(f"💰 {cat} rate → ₹{new_price:.0f}")
                 except Exception as inv_exc:
                     logger.warning("PRICE_UPDATE failed '%s': %s", cat, inv_exc)
@@ -633,9 +642,9 @@ def _save_and_reply(phone: str, entries: List[Dict[str, Any]], media_url: str) -
         if intent == "GET_REPORT":
             continue
 
-        # ADD_ENTRY
+        # ADD_ENTRY — save under real phone but use shared catalog for inventory ops
         try:
-            saved = save_to_db(phone=phone, extracted_data=entry_data, audio_url=media_url)
+            saved = save_to_db(phone=phone, extracted_data=entry_data, audio_url=media_url, catalog_phone=catalog_phone)
             current_profit = float(saved["current_profit"])
             amount = float(saved["entry"].get("amount", 0))
             qty = saved.get("quantity")
@@ -669,14 +678,14 @@ def _save_and_reply(phone: str, entries: List[Dict[str, Any]], media_url: str) -
     return "\n".join(reply_parts)
 
 
-def _save_and_reply_silent(phone: str, entries: List[Dict[str, Any]], media_url: str) -> None:
+def _save_and_reply_silent(phone: str, entries: List[Dict[str, Any]], media_url: str, catalog_phone: str = "web-client") -> None:
     """Save entries silently (no reply generation needed — used for partial saves)."""
     for entry_data in entries:
         intent = str(entry_data.get("intent") or "ADD_ENTRY").upper()
         if intent in ("STOCK_UPDATE", "PRICE_UPDATE", "GET_REPORT"):
             continue
         try:
-            save_to_db(phone=phone, extracted_data=entry_data, audio_url=media_url)
+            save_to_db(phone=phone, extracted_data=entry_data, audio_url=media_url, catalog_phone=catalog_phone)
         except Exception as exc:
             logger.warning("Silent save failed: %s", exc)
 

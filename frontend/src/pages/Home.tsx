@@ -150,39 +150,39 @@ export default function Home() {
   return (
     <div className="flex flex-col gap-6">
       <section className="grid gap-5 lg:grid-cols-3">
-        <div className="col-span-2 rounded-3xl bg-gradient-to-r from-sky-500 via-teal-500 to-emerald-400 p-6 text-white shadow-xl">
+        <div className="col-span-2 rounded-2xl bg-gradient-to-br from-sky-500 to-cyan-400 p-6 text-white shadow-md">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-white/80">{isHindi ? "आज का कुल मुनाफा" : "Today's net profit"}</p>
+              <p className="text-xs uppercase tracking-[0.2em] text-sky-100">{isHindi ? "आज का कुल मुनाफा" : "Today's net profit"}</p>
               <h2 className="mt-2 text-4xl font-extrabold">{formatInr(todayStats.net)}</h2>
-              <p className="mt-1 text-sm text-white/80">{isHindi ? "दर्ज किए गए लेनदेन से" : "From recorded entries"}</p>
+              <p className="mt-1 text-sm text-sky-100">{isHindi ? "दर्ज किए गए लेनदेन से" : "From recorded entries"}</p>
             </div>
-            <div className="rounded-2xl bg-white/20 px-3 py-2 text-xs font-semibold">{streakDays}{isHindi ? " दिन की स्ट्रीक" : "d Streak"}</div>
+            <div className="rounded-xl bg-white/20 px-3 py-2 text-xs font-semibold">{streakDays}{isHindi ? " दिन की स्ट्रीक" : "d Streak"}</div>
           </div>
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl bg-white/15 p-4">
-              <p className="text-xs text-white/70">{isHindi ? "कुल आय" : "Total Earnings"}</p>
+            <div className="rounded-xl bg-white/15 p-4">
+              <p className="text-xs text-sky-100">{isHindi ? "कुल आय" : "Total Earnings"}</p>
               <p className="mt-1 text-xl font-bold">{formatInr(todayStats.earned)}</p>
             </div>
-            <div className="rounded-2xl bg-white/15 p-4">
-              <p className="text-xs text-white/70">{isHindi ? "कुल खर्च" : "Total Expenses"}</p>
+            <div className="rounded-xl bg-white/15 p-4">
+              <p className="text-xs text-sky-100">{isHindi ? "कुल खर्च" : "Total Expenses"}</p>
               <p className="mt-1 text-xl font-bold">{formatInr(todayStats.spent)}</p>
             </div>
           </div>
         </div>
 
         <div className="flex flex-col gap-4">
-          <div className="rounded-3xl border border-slate-200 bg-white/80 p-5 shadow-lg flex-1 flex flex-col justify-center">
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm flex-1 flex flex-col justify-center">
               <p className="text-sm font-semibold text-slate-700">{isHindi ? "त्वरित कार्य" : "Quick Actions"}</p>
               <Link
                 to="/record"
-                className="mt-4 block w-full text-center rounded-2xl bg-slate-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
+                className="mt-4 block w-full text-center rounded-xl bg-slate-900 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
               >
                 {isHindi ? "रिकॉर्ड करें" : "Go to Record"}
               </Link>
               <Link
                 to="/ledger"
-                className="mt-3 block w-full text-center rounded-2xl border border-slate-200 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+                className="mt-3 block w-full text-center rounded-xl border border-slate-200 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
               >
                 {isHindi ? "खाता देखें" : "View Ledger"}
               </Link>
@@ -197,13 +197,13 @@ export default function Home() {
       </section>
 
       <section className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2 rounded-3xl border border-slate-200 bg-white/80 p-5 shadow-lg">
+        <div className="lg:col-span-2 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-semibold text-slate-700">{isHindi ? "आय का प्रवाह" : "Revenue Flow"}</p>
               <p className="text-xs text-slate-500">{isHindi ? "पिछले 7 दिनों में आपकी कमाई" : "Your earnings over the last 7 days"}</p>
             </div>
-            <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">{isHindi ? "पिछले सप्ताह से +18%" : "+18% vs last week"}</span>
+            <span className="rounded-full bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-900">{isHindi ? "पिछले सप्ताह से +18%" : "+18% vs last week"}</span>
           </div>
           <div className="mt-4 h-48 w-full rounded-2xl flex items-end justify-between bg-slate-50 border border-slate-100 p-4 pt-10 px-6 gap-2">
             {last7DaysData.days.map((day, idx) => {
@@ -211,12 +211,12 @@ export default function Home() {
               return (
                 <div key={idx} className="flex flex-col items-center gap-2 group relative w-full h-full justify-end">
                   {/* Tooltip */}
-                  <div className="absolute -top-8 opacity-0 group-hover:opacity-100 transition whitespace-nowrap bg-slate-800 text-white text-xs px-2 py-1 rounded shadow-lg pointer-events-none z-10">
+                  <div className="absolute -top-8 opacity-0 group-hover:opacity-100 transition whitespace-nowrap bg-slate-800 text-white text-xs px-2 py-1 rounded shadow-sm pointer-events-none z-10">
                     {formatInr(day.earned)}
                   </div>
                   {/* Bar */}
                   <div 
-                    className="w-full max-w-[40px] bg-gradient-to-t from-teal-500 to-emerald-400 rounded-t-sm transition-all duration-500 hover:brightness-110" 
+                    className="w-full max-w-[40px] bg-slate-700 rounded-t-sm transition-all duration-500 hover:bg-slate-900" 
                     style={{ height: `${heightPercent}%` }}
                   ></div>
                   {/* Label */}
@@ -227,10 +227,10 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="rounded-3xl border border-slate-200 bg-white/80 p-5 shadow-lg">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between">
             <p className="text-sm font-semibold text-slate-700">{isHindi ? "हाल की गतिविधियां" : "Recent Activity"}</p>
-            <Link to="/ledger" className="text-xs font-semibold text-sky-600 hover:text-sky-700 hover:underline">{isHindi ? "सभी देखें" : "View All"}</Link>
+            <Link to="/ledger" className="text-xs font-semibold text-slate-900 hover:text-slate-800 hover:underline">{isHindi ? "सभी देखें" : "View All"}</Link>
           </div>
           <div className="mt-4 space-y-3">
             {entries.length === 0 ? (

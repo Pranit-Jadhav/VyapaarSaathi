@@ -103,6 +103,10 @@ def _process_and_reply(sender: str, media_url: str) -> None:
     try:
         reply_body = process_voice_message(sender, media_url)
     except Exception as exc:  # pragma: no cover - external API path
+        import traceback
+        with open("/tmp/webhook_err.log", "w") as f:
+            f.write(traceback.format_exc())
+            f.write(f"\nMediaUrl: {media_url}\n")
         logger.exception("Voice message pipeline failed: %s", exc)
         reply_body = FALLBACK_RESPONSE
 

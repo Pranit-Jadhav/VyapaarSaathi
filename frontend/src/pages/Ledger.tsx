@@ -38,7 +38,7 @@ export default function Ledger() {
   }, [entries, ledgerTab]);
 
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white/80 p-6 shadow-lg flex-1">
+    <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm flex-1">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-bold text-slate-800">{isHindi ? "खाता" : "Ledger"}</h2>
@@ -61,7 +61,7 @@ export default function Ledger() {
             onClick={() => setLedgerTab(tab.id)}
             className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
               ledgerTab === tab.id 
-                ? "bg-teal-500 text-white" 
+                ? "bg-sky-500 text-white" 
                 : "border border-slate-200 text-slate-500 hover:bg-slate-50"
             }`}
           >
