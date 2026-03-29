@@ -163,11 +163,27 @@ def upsert_inventory_item(
     unit: str = "piece",
     price_per_unit: float = 0.0,
     item_name_hi: Optional[str] = None,
+    add_stock: bool = False,
+    update_catalog: bool = False,
 ) -> Dict[str, Any]:
     """
     Create or update an item in the vendor's catalog for today.
-    If the item already exists for today, update stock settings.
-    If it's new, set current_stock = daily_stock.
+
+    3 modes (for existing items):
+
+      1. add_stock=True   → RESTOCK: Add qty to current_stock (capped at daily_stock).
+                             daily_stock stays the same.
+                             Used when vendor says "I made 20 more vadapav".
+                             Example: daily=50, current=0, add 20 → current=20, daily=50
+
+      2. update_catalog=True → CATALOG UPDATE: Change daily_stock / price / unit.
+                               current_stock is NOT touched.
+                               Used when vendor edits from the frontend inventory form.
+                               Example: daily 50→70, current stays at 20 → "20 / 70"
+
+      3. Both False (default) → SET: Sets both daily_stock and current_stock.
+                                Used when creating a brand-new item.
+                                Example: new item "dhokla" → daily=50, current=50
     """
     supabase = get_supabase()
     today = _today()
@@ -175,33 +191,61 @@ def upsert_inventory_item(
     # Check if row already exists for today
     existing = (
         supabase.table(TABLE)
-        .select("id,current_stock")
+        .select("id,current_stock,daily_stock,price_per_unit")
         .eq("phone", phone)
         .eq("item_name", item_name.lower().strip())
         .eq("stock_date", today)
         .execute()
     )
 
-    payload: Dict[str, Any] = {
-        "phone": phone,
-        "item_name": item_name.lower().strip(),
-        "item_name_hi": item_name_hi or item_name,
-        "unit": unit,
-        "daily_stock": daily_stock,
-        "current_stock": daily_stock,  # Reset to full stock when vendor updates catalog
-        "price_per_unit": price_per_unit,
-        "stock_date": today,
-        "is_active": True,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-
     rows = existing.data or []
+
     if rows:
-        # Update existing; preserve current_stock deductions already made today
         existing_id = rows[0]["id"]
-        existing_current = rows[0].get("current_stock", daily_stock)
-        # Only increase current_stock proportionally if daily_stock changed
-        payload["current_stock"] = min(existing_current, daily_stock)
+        existing_current = int(rows[0].get("current_stock") or 0)
+        existing_daily = int(rows[0].get("daily_stock") or daily_stock)
+        existing_price = float(rows[0].get("price_per_unit") or 0)
+
+        if add_stock:
+            # ── MODE 1: RESTOCK ──────────────────────────────────────
+            # Add qty to current_stock, keep daily_stock the same
+            new_current = min(existing_current + daily_stock, existing_daily)
+            new_daily = existing_daily
+            logger.info(
+                "RESTOCK '%s': current %d + %d = %d (of %d daily)",
+                item_name, existing_current, daily_stock, new_current, new_daily,
+            )
+        elif update_catalog:
+            # ── MODE 2: CATALOG UPDATE ───────────────────────────────
+            # Update daily_stock / price / unit. current_stock stays as is.
+            new_daily = daily_stock
+            new_current = existing_current  # Don't change what's available!
+            logger.info(
+                "CATALOG UPDATE '%s': daily %d → %d, current stays at %d",
+                item_name, existing_daily, new_daily, new_current,
+            )
+        else:
+            # ── MODE 3: SET (full reset) ─────────────────────────────
+            new_current = daily_stock
+            new_daily = daily_stock
+            logger.info(
+                "SET '%s': daily=%d, current=%d",
+                item_name, new_daily, new_current,
+            )
+
+        payload: Dict[str, Any] = {
+            "phone": phone,
+            "item_name": item_name.lower().strip(),
+            "item_name_hi": item_name_hi or item_name,
+            "unit": unit,
+            "daily_stock": new_daily,
+            "current_stock": new_current,
+            "price_per_unit": price_per_unit if price_per_unit > 0 else existing_price,
+            "stock_date": today,
+            "is_active": True,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
         result = (
             supabase.table(TABLE)
             .update(payload)
@@ -209,7 +253,21 @@ def upsert_inventory_item(
             .execute()
         )
     else:
+        # Brand new item — daily_stock and current_stock = qty
+        payload = {
+            "phone": phone,
+            "item_name": item_name.lower().strip(),
+            "item_name_hi": item_name_hi or item_name,
+            "unit": unit,
+            "daily_stock": daily_stock,
+            "current_stock": daily_stock,
+            "price_per_unit": price_per_unit,
+            "stock_date": today,
+            "is_active": True,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
         result = supabase.table(TABLE).insert(payload).execute()
+        logger.info("Created inventory '%s': stock=%d, price=₹%.0f", item_name, daily_stock, price_per_unit)
 
     return (result.data or [payload])[0]
 

@@ -102,19 +102,6 @@ export default function Inventory() {
           </div>
         </div>
 
-        {/* Voice command hint */}
-        <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {[
-            { icon: "🎙️", en: "\"40 chai bechi\" → deducts 40 from stock", hi: "\"40 chai bechi\" → 40 स्टॉक से कम होगा" },
-            { icon: "📦", en: "\"chai ka stock 100\" → sets stock to 100", hi: "\"chai ka stock 100\" → स्टॉक 100 होगा" },
-            { icon: "💰", en: "\"chai ka rate 15\" → updates price to ₹15", hi: "\"chai ka rate 15\" → कीमत ₹15 होगी" },
-          ].map((tip, i) => (
-            <div key={i} className="flex items-start gap-2 rounded-2xl bg-teal-50 border border-teal-100 px-4 py-3 text-xs text-teal-800">
-              <span className="text-base mt-0.5">{tip.icon}</span>
-              <span className="font-mono leading-snug">{isHindi ? tip.hi : tip.en}</span>
-            </div>
-          ))}
-        </div>
       </div>
 
       {/* ── Add / Edit Form ─────────────────────────────────────────────────── */}

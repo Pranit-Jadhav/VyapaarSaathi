@@ -35,6 +35,39 @@ export type InventoryItem = {
   is_active?: boolean;
 };
 
+export type AIKeyFinding = {
+  title_en: string;
+  title_hi: string;
+  description_en: string;
+  description_hi: string;
+  type: "positive" | "warning" | "critical" | "neutral";
+  icon: string;
+};
+
+export type AIRecommendation = {
+  text_en: string;
+  text_hi: string;
+  priority: "high" | "medium" | "low";
+};
+
+export type CategoryBreakdown = {
+  name: string;
+  amount: number;
+  percentage: number;
+};
+
+export type AIInsightsData = {
+  narrative_en: string;
+  narrative_hi: string;
+  key_findings: AIKeyFinding[];
+  recommendations: AIRecommendation[];
+  health_score: number;
+  category_breakdown: CategoryBreakdown[];
+  metrics: JsonObject;
+  audio_hi_base64: string | null;
+  audio_en_base64: string | null;
+};
+
 const DEFAULT_VENDOR_ID = "123e4567-e89b-12d3-a456-426614174000";
 const MODE_STORAGE_KEY = "vyapaarsaathi-theme-mode";
 
@@ -167,7 +200,7 @@ interface AppState {
   alerts: string[];
   metrics: JsonObject;
   suggestions: JsonValue[];
-  loading: { health: boolean; entries: boolean; insights: boolean; suggestions: boolean };
+  loading: { health: boolean; entries: boolean; insights: boolean; suggestions: boolean; aiInsights: boolean };
   setLoading: (field: keyof AppState["loading"], val: boolean) => void;
   ledgerTab: string;
   setLedgerTab: (tab: string) => void;
@@ -188,8 +221,17 @@ interface AppState {
   runInsights: () => Promise<void>;
   runSuggestions: () => Promise<void>;
   uploadRecording: (blob: Blob) => Promise<void>;
+  uploadAnswer: (blob: Blob) => Promise<void>;
+  cancelPending: () => void;
   startRecording: () => Promise<void>;
   stopRecording: () => void;
+
+  // Conversation state
+  pendingEntry: { reason: string; category: string } | null;
+  counterQuestion: { hi: string; en: string } | null;
+  counterAudioHi: string | null;
+  counterAudioEn: string | null;
+  conversationMode: "normal" | "answering";
 
   // Inventory
   inventory: InventoryItem[];
@@ -199,6 +241,11 @@ interface AppState {
 
   // Reports
   downloadReport: () => Promise<void>;
+
+  // AI Insights
+  aiInsights: AIInsightsData | null;
+  aiInsightsPhase: string;
+  runAIInsights: () => Promise<void>;
 }
 
 let recorderInstance: MediaRecorder | null = null;
@@ -256,7 +303,14 @@ export const useStore = create<AppState>((set, get) => ({
   metrics: {},
   suggestions: [],
   inventory: [],
-  loading: { health: false, entries: false, insights: false, suggestions: false },
+  aiInsights: null,
+  aiInsightsPhase: "",
+  pendingEntry: null,
+  counterQuestion: null,
+  counterAudioHi: null,
+  counterAudioEn: null,
+  conversationMode: "normal" as "normal" | "answering",
+  loading: { health: false, entries: false, insights: false, suggestions: false, aiInsights: false },
   setLoading: (field, val) => set((state) => ({ loading: { ...state.loading, [field]: val } })),
   ledgerTab: "All",
   setLedgerTab: (tab) => set({ ledgerTab: tab }),
@@ -355,13 +409,47 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const data = await fetchJson("/record", { method: "POST", body: form });
       setOutput(data);
+
+      // Check if conversation engine returned a pending status with counter question
+      if (data.status === "pending") {
+        set({
+          pendingEntry: {
+            reason: (data.pending_reason as string) || "",
+            category: (data.pending_category as string) || "",
+          },
+          counterQuestion: {
+            hi: (data.counter_question_hi as string) || "",
+            en: (data.counter_question_en as string) || "",
+          },
+          counterAudioHi: (data.counter_audio_hi as string) || null,
+          counterAudioEn: (data.counter_audio_en as string) || null,
+          conversationMode: "answering",
+        });
+        setRecordStatus("Waiting for your answer...");
+
+        // Still sync any entries that were saved (e.g. complete entries in a batch)
+        if (data.data && (data.data as JsonObject).total_earned) {
+          setSummary(summaryFromEntry(data.data as JsonObject));
+        }
+        await get().loadEntries();
+        return;
+      }
+
+      // Complete — save normally
       if (data.data) {
         setSummary(summaryFromEntry(data.data as JsonObject));
       }
-      // Guarantee flawless state syncing by fully reloading entries from the DB
+      // Clear any pending state
+      set({
+        pendingEntry: null,
+        counterQuestion: null,
+        counterAudioHi: null,
+        counterAudioEn: null,
+        conversationMode: "normal",
+      });
+
       await get().loadEntries();
       
-      // If there were inventory updates (like PRICE_UPDATE or STOCK_UPDATE intent), refresh stock too
       if (Array.isArray(data.inventory_updates) && data.inventory_updates.length > 0) {
         get().loadInventory();
       }
@@ -373,8 +461,77 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  uploadAnswer: async (blob: Blob) => {
+    const { vendorId, setRecordStatus, setOutput, setSummary } = get();
+    setRecordStatus("Processing your answer...");
+    const form = new FormData();
+    form.append("audio", blob, "voice-answer.webm");
+    form.append("vendor_id", vendorId.trim());
+
+    try {
+      const data = await fetchJson("/record/answer", { method: "POST", body: form });
+      setOutput(data);
+
+      if (data.status === "pending") {
+        // Still pending — another round of questions
+        set({
+          pendingEntry: {
+            reason: (data.pending_reason as string) || "",
+            category: (data.pending_category as string) || "",
+          },
+          counterQuestion: {
+            hi: (data.counter_question_hi as string) || "",
+            en: (data.counter_question_en as string) || "",
+          },
+          counterAudioHi: (data.counter_audio_hi as string) || null,
+          counterAudioEn: (data.counter_audio_en as string) || null,
+          conversationMode: "answering",
+        });
+        setRecordStatus("Waiting for your answer...");
+        
+        // If inventory was created in this round, refresh
+        if (data.inventory_created) {
+          get().loadInventory();
+        }
+        return;
+      }
+
+      // Complete!
+      if (data.data) {
+        setSummary(summaryFromEntry(data.data as JsonObject));
+      }
+      set({
+        pendingEntry: null,
+        counterQuestion: null,
+        counterAudioHi: null,
+        counterAudioEn: null,
+        conversationMode: "normal",
+      });
+
+      await get().loadEntries();
+      get().loadInventory();
+      setRecordStatus("✅ Entry saved successfully!");
+    } catch (error) {
+      setOutput({ error: String(error) });
+      setRecordStatus("Answer processing failed.");
+    }
+  },
+
+  cancelPending: () => {
+    const { vendorId } = get();
+    set({
+      pendingEntry: null,
+      counterQuestion: null,
+      counterAudioHi: null,
+      counterAudioEn: null,
+      conversationMode: "normal",
+    });
+    // Fire-and-forget cancel on server
+    fetchJson(`/record/cancel?vendor_id=${encodeURIComponent(vendorId)}`, { method: "POST" }).catch(() => {});
+  },
+
   startRecording: async () => {
-    const { uploadRecording, setRecordStatus, setIsRecording } = get();
+    const { uploadRecording, uploadAnswer, conversationMode, setRecordStatus, setIsRecording } = get();
     if (!navigator.mediaDevices?.getUserMedia) {
       setRecordStatus("Audio recording is not supported in this browser.");
       return;
@@ -404,7 +561,12 @@ export const useStore = create<AppState>((set, get) => ({
         }
 
         const blob = new Blob(chunksArray, { type: "audio/webm" });
-        await uploadRecording(blob);
+        // Route to correct handler based on conversation state
+        if (conversationMode === "answering") {
+          await uploadAnswer(blob);
+        } else {
+          await uploadRecording(blob);
+        }
         
         stream.getTracks().forEach((track) => track.stop());
       };
@@ -498,6 +660,45 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (e: any) {
       console.warn("downloadReport failed:", e);
       alert("Error fetching report from server.");
+    }
+  },
+
+  // ── AI Insights ────────────────────────────────────────────────────────────
+  runAIInsights: async () => {
+    const { vendorId, userName, vendorType, language, setLoading } = get();
+    setLoading("aiInsights", true);
+    set({ aiInsightsPhase: language === "hi" ? "डेटा विश्लेषण हो रहा है..." : "Analyzing your data..." });
+    try {
+      // Small delay so the user sees the phase text
+      await new Promise(r => setTimeout(r, 300));
+      set({ aiInsightsPhase: language === "hi" ? "AI सुझाव बना रहा है..." : "Generating AI insights..." });
+
+      const data = await fetchJson(
+        `/ai-insights?vendor_id=${encodeURIComponent(vendorId)}&vendor_name=${encodeURIComponent(userName || "Vendor")}&vendor_type=${encodeURIComponent(vendorType || "street vendor")}&language=${encodeURIComponent(language)}`
+      );
+
+      set({ aiInsightsPhase: language === "hi" ? "ऑडियो बना रहा है..." : "Creating audio summary..." });
+      await new Promise(r => setTimeout(r, 200));
+
+      set({
+        aiInsights: {
+          narrative_en: (data.narrative_en as string) || "",
+          narrative_hi: (data.narrative_hi as string) || "",
+          key_findings: (data.key_findings as AIKeyFinding[]) || [],
+          recommendations: (data.recommendations as AIRecommendation[]) || [],
+          health_score: (data.health_score as number) || 0,
+          category_breakdown: (data.category_breakdown as CategoryBreakdown[]) || [],
+          metrics: (typeof data.metrics === "object" && data.metrics !== null && !Array.isArray(data.metrics) ? data.metrics : {}) as JsonObject,
+          audio_hi_base64: (data.audio_hi_base64 as string) || null,
+          audio_en_base64: (data.audio_en_base64 as string) || null,
+        },
+        aiInsightsPhase: "",
+      });
+    } catch (error) {
+      console.error("runAIInsights failed:", error);
+      set({ aiInsightsPhase: "" });
+    } finally {
+      setLoading("aiInsights", false);
     }
   },
 }));

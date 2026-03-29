@@ -505,6 +505,11 @@ def send_whatsapp_reply(to_phone: str, body: str, media_url: Optional[str] = Non
 
 
 def process_voice_message(phone: str, media_url: str) -> str:
+    from services.conversation_engine import (
+        analyze_voice_input, process_follow_up_answer, has_pending, get_pending,
+    )
+    from services.inventory import get_inventory
+
     with tempfile.TemporaryDirectory(prefix="vyapaarsaathi-wa-") as tmp_dir:
         working_dir = Path(tmp_dir)
         raw_audio = download_audio(media_url, working_dir)
@@ -519,22 +524,42 @@ def process_voice_message(phone: str, media_url: str) -> str:
     if not extracted:
         return FALLBACK_RESPONSE
 
-    total_income = 0.0
-    total_expense = 0.0
-    parts = []
-    inventory_confirmations = []
-    current_profit = 0.0
+    # Get inventory for conversation engine
+    try:
+        inv_items = get_inventory(phone)
+    except Exception:
+        inv_items = []
 
+    # ── Check if this is a follow-up answer to a pending question ─────────
+    if has_pending(phone):
+        result = process_follow_up_answer(
+            phone=phone,
+            answer_transcript=transcript,
+            answer_extracted=extracted,
+            inventory_items=inv_items,
+        )
+
+        if result["status"] == "pending":
+            # Still pending — send another counter question
+            question = result.get("counter_question_hi", "")
+            if result.get("inventory_created"):
+                inv_info = result["inventory_created"]
+                question = f"✅ {inv_info['item']} inventory mein add ho gaya (₹{int(inv_info['price'])}/piece).\n{question}"
+            return f"🤖 {question}"
+
+        if result["status"] == "complete":
+            # Save all entries
+            return _save_and_reply(phone, result.get("entries_to_save", []), media_url)
+
+    # ── Fresh message — analyze against inventory ────────────────────────
+    # First handle GET_REPORT separately (not inventory-dependent)
     for entry_data in extracted:
         intent = str(entry_data.get("intent") or "ADD_ENTRY").upper()
-
-        # ── GET_REPORT: vendor asks for their record/report PDF ──────────────
         if intent == "GET_REPORT":
             try:
                 from services.report_generator import generate_pnl_pdf
                 pdf_url = generate_pnl_pdf(phone, vendor_name=phone)
                 if pdf_url:
-                    # Send PDF via WhatsApp
                     send_whatsapp_reply(
                         to_phone=phone,
                         body="📊 Here is your weekly P&L report:",
@@ -547,7 +572,30 @@ def process_voice_message(phone: str, media_url: str) -> str:
                 logger.error("GET_REPORT failed: %s", report_exc)
                 return "⚠️ Report generation failed. Please try again."
 
-        # ── STOCK_UPDATE: vendor restocks an item ────────────────────────────
+    # Analyze all entries against inventory
+    analysis = analyze_voice_input(extracted, phone, inv_items)
+
+    if analysis["status"] == "pending":
+        # Send counter question — save any complete entries first
+        if analysis.get("entries_to_save"):
+            _save_and_reply_silent(phone, analysis["entries_to_save"], media_url)
+        question = analysis.get("counter_question_hi", "")
+        return f"🤖 {question}"
+
+    # All complete — save everything
+    return _save_and_reply(phone, analysis.get("entries_to_save", []), media_url)
+
+
+def _save_and_reply(phone: str, entries: List[Dict[str, Any]], media_url: str) -> str:
+    """Save entries and build WhatsApp reply text."""
+    total_income = 0.0
+    total_expense = 0.0
+    parts = []
+    inventory_confirmations = []
+    current_profit = 0.0
+
+    for entry_data in entries:
+        intent = str(entry_data.get("intent") or "ADD_ENTRY").upper()
 
         if intent == "STOCK_UPDATE":
             cat = str(entry_data.get("category") or "").strip().lower()
@@ -558,19 +606,12 @@ def process_voice_message(phone: str, media_url: str) -> str:
             if cat and qty > 0:
                 try:
                     from services.inventory import upsert_inventory_item
-                    upsert_inventory_item(
-                        phone=phone,
-                        item_name=cat,
-                        daily_stock=qty,
-                        unit=entry_data.get("unit", "piece"),
-                    )
+                    upsert_inventory_item(phone=phone, item_name=cat, daily_stock=qty, unit=entry_data.get("unit", "piece"), add_stock=True)
                     inventory_confirmations.append(f"📦 {cat} stock → {qty}")
-                    logger.info("WhatsApp STOCK_UPDATE: %s → %d for %s", cat, qty, phone)
                 except Exception as inv_exc:
-                    logger.warning("WhatsApp STOCK_UPDATE failed '%s': %s", cat, inv_exc)
-            continue  # No ledger row needed
+                    logger.warning("STOCK_UPDATE failed '%s': %s", cat, inv_exc)
+            continue
 
-        # ── PRICE_UPDATE: vendor changes price ────────────────────────────────
         if intent == "PRICE_UPDATE":
             cat = str(entry_data.get("category") or "").strip().lower()
             try:
@@ -583,21 +624,19 @@ def process_voice_message(phone: str, media_url: str) -> str:
                     _sb.table("inventory").update({
                         "price_per_unit": new_price,
                         "updated_at": datetime.now(timezone.utc).isoformat(),
-                    }).eq("phone", phone).eq("item_name", cat).eq(
-                        "stock_date", date.today().isoformat()
-                    ).execute()
+                    }).eq("phone", phone).eq("item_name", cat).eq("stock_date", date.today().isoformat()).execute()
                     inventory_confirmations.append(f"💰 {cat} rate → ₹{new_price:.0f}")
-                    logger.info("WhatsApp PRICE_UPDATE: %s → ₹%.2f for %s", cat, new_price, phone)
                 except Exception as inv_exc:
-                    logger.warning("WhatsApp PRICE_UPDATE failed '%s': %s", cat, inv_exc)
-            continue  # No ledger row needed
+                    logger.warning("PRICE_UPDATE failed '%s': %s", cat, inv_exc)
+            continue
 
+        if intent == "GET_REPORT":
+            continue
 
-        # ── ADD_ENTRY: normal income / expense ────────────────────────────────
+        # ADD_ENTRY
         try:
             saved = save_to_db(phone=phone, extracted_data=entry_data, audio_url=media_url)
             current_profit = float(saved["current_profit"])
-            # amount may have been computed in save_to_db from inventory price
             amount = float(saved["entry"].get("amount", 0))
             qty = saved.get("quantity")
             entry_type = entry_data.get("type") or "income"
@@ -617,8 +656,6 @@ def process_voice_message(phone: str, media_url: str) -> str:
             logger.warning("save_to_db failed for entry %s: %s", entry_data, save_exc)
             continue
 
-
-    # Build reply
     reply_parts = []
     if parts:
         reply_parts.append("✅ " + ", ".join(parts))
@@ -630,6 +667,18 @@ def process_voice_message(phone: str, media_url: str) -> str:
         return FALLBACK_RESPONSE
 
     return "\n".join(reply_parts)
+
+
+def _save_and_reply_silent(phone: str, entries: List[Dict[str, Any]], media_url: str) -> None:
+    """Save entries silently (no reply generation needed — used for partial saves)."""
+    for entry_data in entries:
+        intent = str(entry_data.get("intent") or "ADD_ENTRY").upper()
+        if intent in ("STOCK_UPDATE", "PRICE_UPDATE", "GET_REPORT"):
+            continue
+        try:
+            save_to_db(phone=phone, extracted_data=entry_data, audio_url=media_url)
+        except Exception as exc:
+            logger.warning("Silent save failed: %s", exc)
 
 
 def _build_weekly_summary_message(total_income: float, total_expense: float) -> str:

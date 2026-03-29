@@ -36,6 +36,8 @@ from services.voice_ledger import (
 )
 from supabase_config import get_supabase
 from services.stock_suggestions import aggregate_item_stats, call_groq_for_suggestions
+from services.ai_insights import run_insights_pipeline
+from services.conversation_engine import analyze_voice_input, process_follow_up_answer, has_pending, cancel_pending
 from services.inventory import (
     get_inventory,
     upsert_inventory_item,
@@ -267,23 +269,28 @@ async def record_voice_entry(
             else:
                 phone_identifier = raw_id[:32]
 
-            # Save ALL extracted entries (income + expense as separate rows)
+            # ── Conversation Engine: analyze against inventory ────────────
+            try:
+                inv_items = get_inventory(phone_identifier)
+            except Exception:
+                inv_items = []
+
+            analysis = analyze_voice_input(extracted, phone_identifier, inv_items)
+
+            # Process entries that are already complete (STOCK_UPDATE, PRICE_UPDATE, complete sales)
             total_earned = 0.0
             total_spent = 0.0
             items_sold = []
             expenses_list = []
-            inventory_updates = []   # STOCK_UPDATE / PRICE_UPDATE results
+            inventory_updates = []
             last_saved = {}
             current_profit = 0.0
 
-            for entry_data in extracted:
+            for entry_data in analysis.get("entries_to_save", []):
                 intent = str(entry_data.get("intent") or "ADD_ENTRY").upper()
 
-                # ── GET_REPORT: skip for web — handled by frontend PDF generator
                 if intent == "GET_REPORT":
                     continue
-
-                # ── STOCK_UPDATE: vendor sets stock count of an item ──────────
 
                 if intent == "STOCK_UPDATE":
                     cat = str(entry_data.get("category") or "").strip().lower()
@@ -293,24 +300,18 @@ async def record_voice_entry(
                         qty = 0
                     if cat and qty > 0:
                         try:
-                            from services.inventory import upsert_inventory_item
                             row = upsert_inventory_item(
                                 phone=phone_identifier,
                                 item_name=cat,
                                 daily_stock=qty,
                                 unit=entry_data.get("unit", "piece"),
+                                add_stock=True,
                             )
-                            inventory_updates.append({
-                                "action": "stock_updated",
-                                "item": cat,
-                                "new_stock": qty,
-                            })
-                            logger.info("STOCK_UPDATE: %s → %d", cat, qty)
+                            inventory_updates.append({"action": "stock_updated", "item": cat, "new_stock": qty})
                         except Exception as inv_exc:
                             logger.warning("STOCK_UPDATE failed for '%s': %s", cat, inv_exc)
-                    continue  # Don't write a ledger row
+                    continue
 
-                # ── PRICE_UPDATE: vendor changes selling price of an item ─────
                 if intent == "PRICE_UPDATE":
                     cat = str(entry_data.get("category") or "").strip().lower()
                     try:
@@ -326,22 +327,16 @@ async def record_voice_entry(
                                 "price_per_unit": new_price,
                                 "updated_at": datetime.now(timezone.utc).isoformat(),
                             }).eq("phone", phone_identifier).eq("item_name", cat).eq("stock_date", today).execute()
-                            inventory_updates.append({
-                                "action": "price_updated",
-                                "item": cat,
-                                "new_price": new_price,
-                            })
-                            logger.info("PRICE_UPDATE: %s → ₹%.2f", cat, new_price)
+                            inventory_updates.append({"action": "price_updated", "item": cat, "new_price": new_price})
                         except Exception as inv_exc:
                             logger.warning("PRICE_UPDATE failed for '%s': %s", cat, inv_exc)
-                    continue  # Don't write a ledger row
+                    continue
 
-                # ── ADD_ENTRY: normal income / expense ledger row ─────────────
+                # ADD_ENTRY
                 saved = save_to_db(phone=phone_identifier, extracted_data=entry_data, audio_url="")
                 last_saved = saved.get("entry", {})
                 current_profit = saved.get("current_profit", 0.0)
-
-                amount = float(entry_data.get("amount", 0))
+                amount = float(saved["entry"].get("amount", 0)) if saved.get("entry") else 0
                 entry_type = entry_data.get("type", "")
                 display_name = entry_data.get("description") or entry_data.get("category", "")
 
@@ -352,7 +347,9 @@ async def record_voice_entry(
                     total_spent += amount
                     expenses_list.append({"item_name": display_name, "amount": amount})
 
-            return {
+            # Build response
+            response: Dict[str, Any] = {
+                "status": analysis["status"],
                 "transcript": transcript,
                 "extracted": extracted,
                 "inventory_updates": inventory_updates,
@@ -367,9 +364,22 @@ async def record_voice_entry(
                 },
                 "current_profit": current_profit,
             }
+
+            # If pending, add counter question data
+            if analysis["status"] == "pending":
+                response["pending_reason"] = analysis.get("pending_reason", "")
+                response["pending_category"] = analysis.get("pending_category", "")
+                response["counter_question_hi"] = analysis.get("counter_question_hi", "")
+                response["counter_question_en"] = analysis.get("counter_question_en", "")
+                response["counter_audio_hi"] = analysis.get("counter_audio_hi")
+                response["counter_audio_en"] = analysis.get("counter_audio_en")
+                if analysis.get("inventory_created"):
+                    response["inventory_created"] = analysis["inventory_created"]
+
+            return response
     except HTTPException:
         raise
-    except Exception as exc:  # pragma: no cover - external paths
+    except Exception as exc:
         logger.exception("/record upload failed: %s", exc)
         message = str(exc).lower()
         if "row-level security policy" in message or "code': '42501" in message:
@@ -381,6 +391,134 @@ async def record_voice_entry(
                 ),
             )
         raise HTTPException(status_code=500, detail=f"Record failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Follow-up answer endpoint (conversation continuation)
+# ---------------------------------------------------------------------------
+@app.post("/record/answer")
+async def record_follow_up_answer(
+    audio: UploadFile = File(...),
+    vendor_id: str = Form(""),
+) -> Dict[str, Any]:
+    """
+    Handle the user's follow-up voice answer to a counter question.
+    Merges the answer with the pending entry and saves if complete.
+    """
+    settings = get_settings()
+
+    try:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory(prefix="vyapaarsaathi-answer-") as tmp_dir:
+            working_dir = Path(tmp_dir)
+            extension = Path(audio.filename or "uploaded.webm").suffix or ".webm"
+            raw_path = working_dir / f"incoming{extension}"
+            raw_path.write_bytes(await audio.read())
+
+            mp3_audio = convert_audio(raw_path, working_dir)
+            transcript_payload = transcribe_audio(mp3_audio)
+            transcript = (transcript_payload.get("text") or "").strip()
+
+            if not transcript:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Transcript was empty")
+
+            # Map vendor_id to phone
+            raw_id = vendor_id.strip()
+            if not raw_id or _is_uuid(raw_id):
+                phone_identifier = "web-client"
+            else:
+                phone_identifier = raw_id[:32]
+
+            # Extract data from the answer
+            answer_extracted = extract_json(transcript) or []
+
+            # Get inventory
+            try:
+                inv_items = get_inventory(phone_identifier)
+            except Exception:
+                inv_items = []
+
+            # Process the follow-up
+            result = process_follow_up_answer(
+                phone=phone_identifier,
+                answer_transcript=transcript,
+                answer_extracted=answer_extracted,
+                inventory_items=inv_items,
+            )
+
+            # Save any complete entries
+            total_earned = 0.0
+            total_spent = 0.0
+            items_sold = []
+            expenses_list = []
+            last_saved = {}
+            current_profit = 0.0
+
+            if result["status"] == "complete":
+                for entry_data in result.get("entries_to_save", []):
+                    intent = str(entry_data.get("intent") or "ADD_ENTRY").upper()
+                    if intent in ("STOCK_UPDATE", "PRICE_UPDATE", "GET_REPORT"):
+                        continue
+
+                    saved = save_to_db(phone=phone_identifier, extracted_data=entry_data, audio_url="")
+                    last_saved = saved.get("entry", {})
+                    current_profit = saved.get("current_profit", 0.0)
+                    amount = float(saved["entry"].get("amount", 0)) if saved.get("entry") else 0
+                    entry_type = entry_data.get("type", "")
+                    display_name = entry_data.get("description") or entry_data.get("category", "")
+
+                    if entry_type == "income":
+                        total_earned += amount
+                        items_sold.append({"item_name": display_name, "amount": amount})
+                    elif entry_type == "expense":
+                        total_spent += amount
+                        expenses_list.append({"item_name": display_name, "amount": amount})
+
+            response: Dict[str, Any] = {
+                "status": result["status"],
+                "transcript": transcript,
+                "data": {
+                    **last_saved,
+                    "transcription": transcript,
+                    "total_earned": total_earned,
+                    "total_spent": total_spent,
+                    "items_sold": items_sold,
+                    "expenses": expenses_list,
+                    "entry_date": str(last_saved.get("created_at", "")),
+                },
+                "current_profit": current_profit,
+            }
+
+            if result["status"] == "pending":
+                response["pending_reason"] = result.get("pending_reason", "")
+                response["pending_category"] = result.get("pending_category", "")
+                response["counter_question_hi"] = result.get("counter_question_hi", "")
+                response["counter_question_en"] = result.get("counter_question_en", "")
+                response["counter_audio_hi"] = result.get("counter_audio_hi")
+                response["counter_audio_en"] = result.get("counter_audio_en")
+                if result.get("inventory_created"):
+                    response["inventory_created"] = result["inventory_created"]
+
+            return response
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("/record/answer failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Answer processing failed: {exc}")
+
+
+@app.post("/record/cancel")
+def cancel_pending_conversation(vendor_id: str = "") -> Dict[str, str]:
+    """Cancel any pending counter-question conversation."""
+    raw_id = (vendor_id or "").strip()
+    if not raw_id or _is_uuid(raw_id):
+        phone = "web-client"
+    else:
+        phone = raw_id[:32]
+    cancel_pending(phone)
+    return {"status": "cancelled"}
 
 
 @app.post("/webhook", response_class=Response)
@@ -576,6 +714,7 @@ def add_inventory_item(body: InventoryItemIn) -> Dict[str, Any]:
             unit=body.unit,
             price_per_unit=body.price_per_unit,
             item_name_hi=body.item_name_hi or None,
+            update_catalog=True,
         )
         return {"item": row}
     except Exception as exc:
@@ -706,6 +845,69 @@ def get_suggestions(
         raise HTTPException(status_code=500, detail=f"Suggestions failed: {exc}")
 
 
+
+# ---------------------------------------------------------------------------
+# Deep AI Insights endpoint (with voice narration)
+# ---------------------------------------------------------------------------
+@app.get("/ai-insights")
+def get_ai_insights(
+    vendor_id: str = "",
+    vendor_name: str = "Vendor",
+    vendor_type: str = "street vendor",
+    language: str = "hi",
+) -> Dict[str, Any]:
+    """
+    Deep AI analysis of the vendor's business with voice narration.
+    Returns metrics, AI-generated narrative, key findings, recommendations,
+    and a base64-encoded MP3 audio of the summary.
+    """
+    settings = get_settings()
+    supabase = get_supabase()
+
+    try:
+        # Fetch ledger entries (last 30 days)
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        query = (
+            supabase.table("ledger")
+            .select("id,phone,amount,type,category,description,created_at")
+            .gte("created_at", cutoff)
+            .order("created_at", desc=True)
+            .limit(500)
+        )
+
+        incoming = (vendor_id or "").strip()
+        if _is_phone_identifier(incoming):
+            normalized = incoming if incoming.startswith("whatsapp:") else f"whatsapp:{incoming}"
+            query = query.eq("phone", normalized)
+
+        result = query.execute()
+        ledger_rows = result.data or []
+
+        # Fetch inventory items
+        phone_key = "web-client"
+        if _is_phone_identifier(incoming):
+            phone_key = incoming if incoming.startswith("whatsapp:") else f"whatsapp:{incoming}"
+        try:
+            inv_items = get_inventory(phone_key)
+        except Exception:
+            inv_items = []
+
+        # Run the full pipeline
+        response = run_insights_pipeline(
+            groq_api_key=settings.groq_api_key,
+            groq_model=settings.groq_llm_model,
+            ledger_rows=ledger_rows,
+            inventory_items=inv_items,
+            vendor_name=vendor_name,
+            vendor_type=vendor_type,
+            language=language,
+        )
+
+        return response
+
+    except Exception as exc:
+        logger.exception("/ai-insights failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"AI Insights failed: {exc}")
 
 
 @app.exception_handler(Exception)

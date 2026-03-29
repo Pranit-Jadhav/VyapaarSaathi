@@ -18,7 +18,7 @@ export default function Layout() {
   return (
     <div className={`min-h-screen ${pageBg} flex flex-col`}>
       <header className={`border-b border-transparent ${isNight ? "bg-[#111827]/80" : "bg-white/70"} backdrop-blur sticky top-0 z-10 transition-colors`}>
-        <div className="flex w-full flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-6 lg:px-8">
+        <div className="flex w-full flex-wrap items-center justify-start gap-12 px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center gap-3">
             <img src="/logo.png" alt="Vyapaar Saathi Logo" className="h-12 w-12 object-contain drop-shadow-md" />
             <div>
