@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useStore, formatInr, toNumber, toItemSummary, formatDate, isSameDay, isSameWeek } from "../store/useStore";
-import { generatePnLPDF } from "../utils/generatePDF";
+import { FileText, Filter, Calendar as CalendarIcon, Clock, ChevronDown } from "lucide-react";
 
 const ledgerTabs = [
   { id: "All", en: "All", hi: "सभी" },
@@ -12,7 +12,7 @@ const ledgerTabs = [
 ] as const;
 
 export default function Ledger() {
-  const { entries, ledgerTab, setLedgerTab, language, userName } = useStore();
+  const { entries, ledgerTab, setLedgerTab, language, userName, downloadReport } = useStore();
   const isHindi = language === "hi";
 
   const filteredEntries = useMemo(() => {
@@ -46,7 +46,7 @@ export default function Ledger() {
         </div>
         <button 
           type="button" 
-          onClick={() => generatePnLPDF(entries, userName)}
+          onClick={downloadReport}
           className="rounded-full border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
         >
           {isHindi ? "डेटा डाउनलोड करें" : "Export Data"}

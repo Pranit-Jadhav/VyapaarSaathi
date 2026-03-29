@@ -7,12 +7,12 @@ import subprocess
 import tempfile
 import uuid
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 import requests
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from services.settings import get_settings
 from supabase_config import get_supabase
@@ -40,11 +40,43 @@ SUPPORTED_AUDIO_EXTENSIONS = (
 
 
 class ExtractedEntry(BaseModel):
-    intent: Literal["ADD_ENTRY"]
-    amount: float = Field(gt=0)
-    type: Literal["income", "expense"]
-    category: str = Field(min_length=1, max_length=100)
-    description: str = Field(min_length=1, max_length=500)
+    intent: Literal["ADD_ENTRY", "STOCK_UPDATE", "PRICE_UPDATE", "GET_REPORT"] = "ADD_ENTRY"
+    # ADD_ENTRY fields (required for ADD_ENTRY, ignored for others)
+    amount: Optional[float] = Field(default=None)
+    type: Optional[Literal["income", "expense"]] = Field(default=None)
+    category: Optional[str] = Field(default="report", max_length=100)
+    description: Optional[str] = Field(default="", max_length=500)
+    # Quantity — extracted from voice for ADD_ENTRY, required for STOCK_UPDATE
+    quantity: Optional[float] = Field(default=None)
+    # Price — used by PRICE_UPDATE
+    price_per_unit: Optional[float] = Field(default=None)
+
+    @model_validator(mode="after")
+    def check_intent_fields(self):
+        if self.intent == "ADD_ENTRY":
+            # If vendor says "10 samosa bech diya" → quantity present, amount missing.
+            # We allow this — amount will be computed from inventory price later.
+            if self.quantity is not None and self.quantity > 0 and (self.amount is None or self.amount <= 0):
+                self.amount = 0  # Placeholder — will be filled from price_per_unit × qty
+            # Fix type: sell/bech = income, not expense. LLM sometimes gets this wrong.
+            desc = (self.description or "").lower() + " " + (self.category or "").lower()
+            sell_words = ["bech", "sell", "sold", "bechi", "बेच", "बेची", "bej", "बेज"]
+            if any(w in desc for w in sell_words):
+                self.type = "income"
+            if self.type is None:
+                self.type = "income"  # Default to income for sales
+
+        elif self.intent == "STOCK_UPDATE":
+            if self.quantity is None or self.quantity <= 0:
+                raise ValueError("STOCK_UPDATE requires quantity > 0")
+        elif self.intent == "PRICE_UPDATE":
+            if self.price_per_unit is None or self.price_per_unit <= 0:
+                raise ValueError("PRICE_UPDATE requires price_per_unit > 0")
+        elif self.intent == "GET_REPORT":
+            # No extra validation needed — just a request
+            pass
+        return self
+
 
 
 class ExtractedEntries(BaseModel):
@@ -203,14 +235,42 @@ def extract_json(transcript: str) -> Optional[List[Dict[str, Any]]]:
     system_prompt = (
         "You are a strict JSON extraction service for a small-business ledger. "
         "User audio transcripts can be Hindi, Marathi, Hinglish, or mixed language. "
-        "Extract ALL transactions mentioned and return a JSON object with one key: 'entries' "
-        "which is a list of transaction objects. "
-        "Each object must have keys: intent, amount, type, category, description. "
-        "intent must always be ADD_ENTRY. amount must be a positive number. "
-        "type must be 'income' or 'expense'. category should be concise lowercase text (e.g. chai, milk, rice). "
-        "IMPORTANT: If both income and expense are mentioned, create SEPARATE entries for each — do NOT merge them. "
-        "Example: '500 ki chai bechi, doodh pe 200 kharch' → two entries: income 500 chai, expense 200 milk."
+        "Extract ALL commands and return JSON: {'entries': [...]}\n\n"
+
+        "=== intent: ADD_ENTRY (vendor sold or spent money) ===\n"
+        "Keys: intent, amount, type, category, description, quantity.\n"
+        "RULES:\n"
+        "- 'bech', 'bechi', 'bej', 'sell', 'sold', 'diya' = type:'income' (NEVER expense).\n"
+        "- 'kharcha', 'kharch', 'liya', 'buy', 'bought', 'spent' = type:'expense'.\n"
+        "- amount: the RUPEE number. If only quantity is said (no rupees), set amount to null.\n"
+        "- quantity: the COUNT of units sold/bought. Extract if mentioned, else null.\n"
+        "- category: concise lowercase item name (chai, samosa, milk, pav bhaji).\n"
+        "EXAMPLES:\n"
+        "  '100 rupay ke pav bhaji bech diya' → amount:100, type:'income', category:'pav bhaji', quantity:null\n"
+        "  '10 samosa bej diya' → amount:null, type:'income', category:'samosa', quantity:10\n"
+        "  '40 chai bechi 400 mein' → amount:400, type:'income', category:'chai', quantity:40\n"
+        "  'doodh pe 200 kharch' → amount:200, type:'expense', category:'milk', quantity:null\n"
+        "  '20 vadapav aur 30 samosa bech diya' → TWO entries, both income\n\n"
+
+        "=== intent: STOCK_UPDATE (vendor sets/restocks inventory) ===\n"
+        "Use ONLY when vendor says they are PREPARING/RESTOCKING, NOT selling.\n"
+        "Keys: intent, category, quantity. (No amount, no type.)\n"
+        "Examples: 'chai ka stock 100', 'maine 80 samosa banaya', 'aaj 60 vada pav rakha'\n\n"
+
+        "=== intent: PRICE_UPDATE (vendor changes price of an item) ===\n"
+        "Use ONLY when vendor mentions a NEW rate/price, NOT a sale.\n"
+        "Keys: intent, category, price_per_unit. (No amount, no type.)\n"
+        "Examples: 'chai ka rate 12 rupay', 'samosa ab 20 ka'\n\n"
+
+        "=== intent: GET_REPORT (vendor asks for their record/report) ===\n"
+        "Use when vendor asks for their report, record, hisaab, statement.\n"
+        "Keys: intent (only). Set category to 'report'.\n"
+        "Examples: 'mera record do', 'mujhe mera hisaab do', 'give me my report', "
+        "'mera record bhejo', 'weekly report do', 'mera hisaab kitab bhejo'\n\n"
+
+        "Return ONLY valid JSON. No explanation.\n"
     )
+
 
     payload: Dict[str, Any] = {
         "model": settings.groq_llm_model,
@@ -310,20 +370,110 @@ def save_to_db(phone: str, extracted_data: Dict[str, Any], audio_url: str) -> Di
     """Save a single extracted entry. extracted_data is a single entry dict."""
     supabase = get_supabase()
 
+    # Extract quantity if provided (may be None / missing)
+    raw_qty = extracted_data.get("quantity")
+    quantity: Optional[float] = None
+    if raw_qty is not None:
+        try:
+            quantity = float(raw_qty)
+            if quantity <= 0:
+                quantity = None
+        except (TypeError, ValueError):
+            quantity = None
+
+    # Compute amount from inventory price if vendor only said quantity, no ₹ amount
+    raw_amount = extracted_data.get("amount") or 0
+    try:
+        amount = float(raw_amount)
+    except (TypeError, ValueError):
+        amount = 0.0
+
+    if amount <= 0 and quantity is not None and quantity > 0:
+        # Look up price from inventory
+        try:
+            from services.inventory import get_inventory
+            inv_items = get_inventory(phone)
+            cat_lower = str(extracted_data.get("category") or "").strip().lower()
+            for inv_item in inv_items:
+                if inv_item.get("item_name") == cat_lower:
+                    price = float(inv_item.get("price_per_unit") or 0)
+                    if price > 0:
+                        amount = quantity * price
+                        logger.info("Computed amount ₹%.2f from qty=%g × price=₹%.2f for '%s'",
+                                    amount, quantity, price, cat_lower)
+                    break
+        except Exception as price_exc:
+            logger.warning("Price lookup failed: %s", price_exc)
+
+        # If still 0, set amount = quantity (placeholder to prevent DB constraint violation)
+        if amount <= 0:
+            amount = quantity
+            logger.info("No price found for '%s', using amount=quantity=%g", extracted_data.get("category"), quantity)
+
     record = {
         "phone": phone,
-        "amount": float(extracted_data["amount"]),
-        "type": extracted_data["type"],
-        "category": extracted_data["category"],
-        "description": extracted_data["description"],
+        "amount": amount,
+        "type": extracted_data.get("type") or "income",
+        "category": extracted_data.get("category") or "general",
+        "description": extracted_data.get("description") or extracted_data.get("category") or "",
         "audio_url": audio_url,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    if quantity is not None:
+        record["quantity"] = quantity
+
 
     insert_result = supabase.table("ledger").insert(record).execute()
     inserted = (insert_result.data or [record])[0]
     current_profit = _calculate_current_profit(phone)
-    return {"entry": inserted, "current_profit": current_profit}
+
+    # Auto-deduct from inventory for ALL income entries
+    # If quantity is known, use it directly. If only amount, compute qty from price.
+    stockout_info = None
+    if record.get("type") == "income":
+        deduct_qty = quantity  # may be None
+        category = (extracted_data.get("category") or "").lower().strip()
+
+        # If no quantity but we have amount, compute from inventory price
+        if deduct_qty is None and amount > 0 and category:
+            try:
+                from services.inventory import get_inventory
+                inv_items = get_inventory(phone)
+                # Also check web-client if phone is different
+                if phone != "web-client" and not inv_items:
+                    inv_items = get_inventory("web-client")
+                for inv_item in inv_items:
+                    if inv_item.get("item_name") == category or \
+                       category.replace(" ", "") in inv_item.get("item_name", "").replace(" ", "") or \
+                       inv_item.get("item_name", "").replace(" ", "") in category.replace(" ", ""):
+                        price = float(inv_item.get("price_per_unit") or 0)
+                        if price > 0:
+                            deduct_qty = amount / price
+                            logger.info("Computed qty=%.1f from amount=₹%.0f / price=₹%.0f for '%s'",
+                                        deduct_qty, amount, price, category)
+                        break
+            except Exception as price_exc:
+                logger.warning("Price lookup for qty computation failed: %s", price_exc)
+
+        if deduct_qty is not None and deduct_qty > 0:
+            try:
+                from services.inventory import deduct_stock
+                stockout_info = deduct_stock(
+                    phone=phone,
+                    item_name=category,
+                    quantity=deduct_qty,
+                )
+            except Exception as inv_exc:
+                logger.warning("Inventory deduction failed for '%s': %s", category, inv_exc)
+
+    return {
+        "entry": inserted,
+        "current_profit": current_profit,
+        "quantity": quantity,
+        "stockout": stockout_info.get("stockout") if stockout_info else False,
+        "inventory_updated": stockout_info is not None,
+    }
+
 
 
 def send_whatsapp_reply(to_phone: str, body: str, media_url: Optional[str] = None) -> str:
@@ -372,26 +522,114 @@ def process_voice_message(phone: str, media_url: str) -> str:
     total_income = 0.0
     total_expense = 0.0
     parts = []
+    inventory_confirmations = []
     current_profit = 0.0
 
     for entry_data in extracted:
-        saved = save_to_db(phone=phone, extracted_data=entry_data, audio_url=media_url)
-        current_profit = float(saved["current_profit"])
-        amount = float(entry_data["amount"])
-        entry_type = entry_data["type"]
-        category = entry_data.get("category", "")
-        if entry_type == "income":
-            total_income += amount
-            parts.append(f"Income {_format_inr(amount)} ({category})")
-        else:
-            total_expense += amount
-            parts.append(f"Expense {_format_inr(amount)} ({category})")
+        intent = str(entry_data.get("intent") or "ADD_ENTRY").upper()
 
-    summary = ", ".join(parts)
-    return (
-        f"✅ {summary} saved. "
-        f"Current profit: {_format_inr(current_profit)}"
-    )
+        # ── GET_REPORT: vendor asks for their record/report PDF ──────────────
+        if intent == "GET_REPORT":
+            try:
+                from services.report_generator import generate_pnl_pdf
+                pdf_url = generate_pnl_pdf(phone, vendor_name=phone)
+                if pdf_url:
+                    # Send PDF via WhatsApp
+                    send_whatsapp_reply(
+                        to_phone=phone,
+                        body="📊 Here is your weekly P&L report:",
+                        media_url=pdf_url,
+                    )
+                    return "📊 Your weekly report has been sent! Check the PDF attached above."
+                else:
+                    return "⚠️ No transactions found this week. Record some sales first!"
+            except Exception as report_exc:
+                logger.error("GET_REPORT failed: %s", report_exc)
+                return "⚠️ Report generation failed. Please try again."
+
+        # ── STOCK_UPDATE: vendor restocks an item ────────────────────────────
+
+        if intent == "STOCK_UPDATE":
+            cat = str(entry_data.get("category") or "").strip().lower()
+            try:
+                qty = int(float(entry_data.get("quantity") or 0))
+            except (TypeError, ValueError):
+                qty = 0
+            if cat and qty > 0:
+                try:
+                    from services.inventory import upsert_inventory_item
+                    upsert_inventory_item(
+                        phone=phone,
+                        item_name=cat,
+                        daily_stock=qty,
+                        unit=entry_data.get("unit", "piece"),
+                    )
+                    inventory_confirmations.append(f"📦 {cat} stock → {qty}")
+                    logger.info("WhatsApp STOCK_UPDATE: %s → %d for %s", cat, qty, phone)
+                except Exception as inv_exc:
+                    logger.warning("WhatsApp STOCK_UPDATE failed '%s': %s", cat, inv_exc)
+            continue  # No ledger row needed
+
+        # ── PRICE_UPDATE: vendor changes price ────────────────────────────────
+        if intent == "PRICE_UPDATE":
+            cat = str(entry_data.get("category") or "").strip().lower()
+            try:
+                new_price = float(entry_data.get("price_per_unit") or 0)
+            except (TypeError, ValueError):
+                new_price = 0.0
+            if cat and new_price > 0:
+                try:
+                    _sb = get_supabase()
+                    _sb.table("inventory").update({
+                        "price_per_unit": new_price,
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }).eq("phone", phone).eq("item_name", cat).eq(
+                        "stock_date", date.today().isoformat()
+                    ).execute()
+                    inventory_confirmations.append(f"💰 {cat} rate → ₹{new_price:.0f}")
+                    logger.info("WhatsApp PRICE_UPDATE: %s → ₹%.2f for %s", cat, new_price, phone)
+                except Exception as inv_exc:
+                    logger.warning("WhatsApp PRICE_UPDATE failed '%s': %s", cat, inv_exc)
+            continue  # No ledger row needed
+
+
+        # ── ADD_ENTRY: normal income / expense ────────────────────────────────
+        try:
+            saved = save_to_db(phone=phone, extracted_data=entry_data, audio_url=media_url)
+            current_profit = float(saved["current_profit"])
+            # amount may have been computed in save_to_db from inventory price
+            amount = float(saved["entry"].get("amount", 0))
+            qty = saved.get("quantity")
+            entry_type = entry_data.get("type") or "income"
+            category = entry_data.get("category", "")
+            inv_updated = saved.get("inventory_updated", False)
+
+            if entry_type == "income":
+                total_income += amount
+                qty_str = f" ({int(qty)} {category})" if qty else f" ({category})"
+                amt_str = f" {_format_inr(amount)}" if amount > 0 else ""
+                stock_str = " 📦 Stock updated" if inv_updated else ""
+                parts.append(f"Income{amt_str}{qty_str}{stock_str}")
+            else:
+                total_expense += amount
+                parts.append(f"Expense {_format_inr(amount)} ({category})")
+        except Exception as save_exc:
+            logger.warning("save_to_db failed for entry %s: %s", entry_data, save_exc)
+            continue
+
+
+    # Build reply
+    reply_parts = []
+    if parts:
+        reply_parts.append("✅ " + ", ".join(parts))
+        reply_parts.append(f"Current profit: {_format_inr(current_profit)}")
+    if inventory_confirmations:
+        reply_parts.append("🔄 Updated: " + " | ".join(inventory_confirmations))
+
+    if not reply_parts:
+        return FALLBACK_RESPONSE
+
+    return "\n".join(reply_parts)
 
 
 def _build_weekly_summary_message(total_income: float, total_expense: float) -> str:

@@ -8,7 +8,6 @@ const vendorTypesHi = ["चाय", "फल", "दर्जी", "खाना",
 export default function Onboarding() {
   const navigate = useNavigate();
   const { 
-    mode, setMode, 
     language, setLanguage, 
     vendorType, setVendorType,
     userName, setUserName,
@@ -18,11 +17,11 @@ export default function Onboarding() {
 
   const [step, setStep] = useState(1);
 
-  const isNight = mode === "night";
-  const bgMain = isNight ? "bg-[#1c1c1c] text-slate-200" : "bg-white text-slate-800";
-  const bgCard = isNight ? "bg-[#252525] border-[#333]" : "bg-slate-50 border-slate-200";
-  const textMuted = isNight ? "text-slate-400" : "text-slate-500";
-  const tBtn = isNight ? "bg-[#333] hover:bg-[#444] text-white" : "bg-white hover:bg-slate-50 border border-slate-200 text-slate-800";
+  const isNight = false;
+  const bgMain = "bg-white text-slate-800";
+  const bgCard = "bg-slate-50 border-slate-200";
+  const textMuted = "text-slate-500";
+  const tBtn = "bg-white hover:bg-slate-50 border border-slate-200 text-slate-800";
   const tBtnActive = "bg-indigo-600/20 border border-indigo-500 text-indigo-400";
 
   const handleFinish = () => {
@@ -34,11 +33,7 @@ export default function Onboarding() {
   const isHindi = language === "hi";
 
   return (
-    <div className={`min-h-screen ${isNight ? "bg-[#121212]" : "bg-slate-100"} flex flex-col items-center justify-center p-4`}>
-      <div className="absolute top-4 right-4 flex items-center rounded-full bg-black/10 p-1 backdrop-blur-md">
-        <button onClick={() => setMode("day")} className={`px-3 py-1 text-xs font-semibold rounded-full ${!isNight ? "bg-white text-slate-800 shadow-sm" : "text-slate-400"}`}>Day</button>
-        <button onClick={() => setMode("night")} className={`px-3 py-1 text-xs font-semibold rounded-full ${isNight ? "bg-slate-800 text-white shadow-sm" : "text-slate-500"}`}>Night</button>
-      </div>
+    <div className={`min-h-screen bg-slate-100 flex flex-col items-center justify-center p-4`}>
 
       <div className={`w-full max-w-md rounded-3xl ${bgMain} p-6 sm:p-8 shadow-2xl transition-all`}>
         {/* Step Indicator */}

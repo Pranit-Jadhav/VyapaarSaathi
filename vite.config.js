@@ -5,7 +5,7 @@ import react from "@vitejs/plugin-react";
 // Some of these (/record, /insights) also exist as frontend page routes.
 // The bypass function ensures browser page navigations (Accept: text/html)
 // are served by Vite (SPA), while API calls (fetch/XHR) are proxied.
-const apiPaths = ["/health", "/record", "/entries", "/insights", "/suggestions", "/score", "/pdf", "/confirm"];
+const apiPaths = ["/health", "/record", "/entries", "/insights", "/suggestions", "/score", "/pdf", "/confirm", "/inventory", "/webhook", "/api/report"];
 
 function makeProxyEntry(target) {
   return {

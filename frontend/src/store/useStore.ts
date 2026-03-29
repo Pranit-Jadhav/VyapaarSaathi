@@ -22,6 +22,19 @@ export type Entry = {
   mood_indicator?: JsonValue;
 };
 
+export type InventoryItem = {
+  id?: string;
+  phone?: string;
+  item_name: string;
+  item_name_hi?: string;
+  unit: string;
+  daily_stock: number;
+  current_stock: number;
+  price_per_unit?: number;
+  stock_date?: string;
+  is_active?: boolean;
+};
+
 const DEFAULT_VENDOR_ID = "123e4567-e89b-12d3-a456-426614174000";
 const MODE_STORAGE_KEY = "vyapaarsaathi-theme-mode";
 
@@ -177,6 +190,15 @@ interface AppState {
   uploadRecording: (blob: Blob) => Promise<void>;
   startRecording: () => Promise<void>;
   stopRecording: () => void;
+
+  // Inventory
+  inventory: InventoryItem[];
+  loadInventory: () => Promise<void>;
+  addInventoryItem: (item: Omit<InventoryItem, 'id' | 'phone' | 'stock_date'>) => Promise<void>;
+  removeInventoryItem: (itemName: string) => Promise<void>;
+
+  // Reports
+  downloadReport: () => Promise<void>;
 }
 
 let recorderInstance: MediaRecorder | null = null;
@@ -233,6 +255,7 @@ export const useStore = create<AppState>((set, get) => ({
   alerts: [],
   metrics: {},
   suggestions: [],
+  inventory: [],
   loading: { health: false, entries: false, insights: false, suggestions: false },
   setLoading: (field, val) => set((state) => ({ loading: { ...state.loading, [field]: val } })),
   ledgerTab: "All",
@@ -323,7 +346,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   uploadRecording: async (blob: Blob) => {
-    const { vendorId, setRecordStatus, setOutput, setSummary, setEntries, entries } = get();
+    const { vendorId, setRecordStatus, setOutput, setSummary, setEntries } = get();
     setRecordStatus("Uploading voice note...");
     const form = new FormData();
     form.append("audio", blob, "voice-entry.webm");
@@ -332,11 +355,17 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const data = await fetchJson("/record", { method: "POST", body: form });
       setOutput(data);
-      const entry = data.data;
-      if (entry && typeof entry === "object" && !Array.isArray(entry)) {
-        setSummary(summaryFromEntry(entry as JsonObject));
-        setEntries([entry as Entry, ...entries].slice(0, 200));
+      if (data.data) {
+        setSummary(summaryFromEntry(data.data as JsonObject));
       }
+      // Guarantee flawless state syncing by fully reloading entries from the DB
+      await get().loadEntries();
+      
+      // If there were inventory updates (like PRICE_UPDATE or STOCK_UPDATE intent), refresh stock too
+      if (Array.isArray(data.inventory_updates) && data.inventory_updates.length > 0) {
+        get().loadInventory();
+      }
+      
       setRecordStatus("Entry saved successfully.");
     } catch (error) {
       setOutput({ error: String(error) });
@@ -398,5 +427,77 @@ export const useStore = create<AppState>((set, get) => ({
     if (recorderInstance?.state === "recording") {
       recorderInstance.stop();
     }
-  }
+  },
+
+  // ── Inventory ──────────────────────────────────────────────────────────────
+  loadInventory: async () => {
+    const { vendorId } = get();
+    try {
+      const data = await fetchJson(`/inventory?vendor_id=${encodeURIComponent(vendorId)}`);
+      const items = Array.isArray(data.inventory) ? data.inventory : [];
+      set({ inventory: items as InventoryItem[] });
+    } catch (e) {
+      console.warn("loadInventory failed:", e);
+    }
+  },
+
+  addInventoryItem: async (item) => {
+    const { vendorId, loadInventory } = get();
+    const base = API_BASE || "";
+    try {
+      const res = await fetch(`${base}/inventory`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vendor_id: vendorId,
+          item_name: item.item_name,
+          daily_stock: item.daily_stock,
+          unit: item.unit,
+          price_per_unit: item.price_per_unit ?? 0,
+          item_name_hi: item.item_name_hi ?? "",
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+    } catch (e) {
+      console.error("addInventoryItem failed:", e);
+      alert(`Failed to save item: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    await loadInventory();
+  },
+
+  removeInventoryItem: async (itemName) => {
+    const { vendorId, loadInventory } = get();
+    const base = API_BASE || "";
+    try {
+      const res = await fetch(
+        `${base}/inventory/${encodeURIComponent(itemName)}?vendor_id=${encodeURIComponent(vendorId)}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      console.error("removeInventoryItem failed:", e);
+      alert(`Failed to remove item: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    await loadInventory();
+  },
+
+  downloadReport: async () => {
+    const { vendorId } = get();
+    try {
+      const data = await fetchJson(`/api/report?vendor_id=${encodeURIComponent(vendorId)}`);
+      if (data.pdf_url && typeof data.pdf_url === "string") {
+        window.open(data.pdf_url, "_blank");
+      } else {
+        alert("Failed to generated report or no sales data found.");
+      }
+    } catch (e: any) {
+      console.warn("downloadReport failed:", e);
+      alert("Error fetching report from server.");
+    }
+  },
 }));

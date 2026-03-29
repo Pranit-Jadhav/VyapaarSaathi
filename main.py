@@ -14,6 +14,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from twilio.twiml.messaging_response import MessagingResponse
@@ -34,6 +35,14 @@ from services.voice_ledger import (
     transcribe_audio,
 )
 from supabase_config import get_supabase
+from services.stock_suggestions import aggregate_item_stats, call_groq_for_suggestions
+from services.inventory import (
+    get_inventory,
+    upsert_inventory_item,
+    delete_inventory_item,
+    reset_daily_stock,
+    get_item_stats_from_ledger,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -263,10 +272,71 @@ async def record_voice_entry(
             total_spent = 0.0
             items_sold = []
             expenses_list = []
+            inventory_updates = []   # STOCK_UPDATE / PRICE_UPDATE results
             last_saved = {}
             current_profit = 0.0
 
             for entry_data in extracted:
+                intent = str(entry_data.get("intent") or "ADD_ENTRY").upper()
+
+                # ── GET_REPORT: skip for web — handled by frontend PDF generator
+                if intent == "GET_REPORT":
+                    continue
+
+                # ── STOCK_UPDATE: vendor sets stock count of an item ──────────
+
+                if intent == "STOCK_UPDATE":
+                    cat = str(entry_data.get("category") or "").strip().lower()
+                    try:
+                        qty = int(float(entry_data.get("quantity") or 0))
+                    except (TypeError, ValueError):
+                        qty = 0
+                    if cat and qty > 0:
+                        try:
+                            from services.inventory import upsert_inventory_item
+                            row = upsert_inventory_item(
+                                phone=phone_identifier,
+                                item_name=cat,
+                                daily_stock=qty,
+                                unit=entry_data.get("unit", "piece"),
+                            )
+                            inventory_updates.append({
+                                "action": "stock_updated",
+                                "item": cat,
+                                "new_stock": qty,
+                            })
+                            logger.info("STOCK_UPDATE: %s → %d", cat, qty)
+                        except Exception as inv_exc:
+                            logger.warning("STOCK_UPDATE failed for '%s': %s", cat, inv_exc)
+                    continue  # Don't write a ledger row
+
+                # ── PRICE_UPDATE: vendor changes selling price of an item ─────
+                if intent == "PRICE_UPDATE":
+                    cat = str(entry_data.get("category") or "").strip().lower()
+                    try:
+                        new_price = float(entry_data.get("price_per_unit") or 0)
+                    except (TypeError, ValueError):
+                        new_price = 0.0
+                    if cat and new_price > 0:
+                        try:
+                            supabase = get_supabase()
+                            from datetime import date
+                            today = date.today().isoformat()
+                            supabase.table("inventory").update({
+                                "price_per_unit": new_price,
+                                "updated_at": datetime.now(timezone.utc).isoformat(),
+                            }).eq("phone", phone_identifier).eq("item_name", cat).eq("stock_date", today).execute()
+                            inventory_updates.append({
+                                "action": "price_updated",
+                                "item": cat,
+                                "new_price": new_price,
+                            })
+                            logger.info("PRICE_UPDATE: %s → ₹%.2f", cat, new_price)
+                        except Exception as inv_exc:
+                            logger.warning("PRICE_UPDATE failed for '%s': %s", cat, inv_exc)
+                    continue  # Don't write a ledger row
+
+                # ── ADD_ENTRY: normal income / expense ledger row ─────────────
                 saved = save_to_db(phone=phone_identifier, extracted_data=entry_data, audio_url="")
                 last_saved = saved.get("entry", {})
                 current_profit = saved.get("current_profit", 0.0)
@@ -285,10 +355,10 @@ async def record_voice_entry(
             return {
                 "transcript": transcript,
                 "extracted": extracted,
+                "inventory_updates": inventory_updates,
                 "data": {
                     **last_saved,
                     "transcription": transcript,
-                    # Correct totals summed across ALL entries from this recording
                     "total_earned": total_earned,
                     "total_spent": total_spent,
                     "items_sold": items_sold,
@@ -459,65 +529,183 @@ def get_insights(vendor_id: str = "", refresh: bool = False) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Stock suggestion endpoint
+# Inventory management endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/inventory")
+def get_inventory_items(vendor_id: str = "", phone: str = "") -> Dict[str, Any]:
+    """
+    Get today's inventory for a vendor.
+    Accepts either phone (WhatsApp) or vendor_id (web UUID).
+    """
+    phone_key = phone.strip() or vendor_id.strip() or "web-client"
+    if not phone_key.startswith("whatsapp:") and _is_phone_identifier(phone_key):
+        phone_key = f"whatsapp:{phone_key}"
+    elif _is_uuid(phone_key):
+        phone_key = "web-client"
+    try:
+        items = get_inventory(phone_key)
+        return {"inventory": items, "date": __import__('datetime').date.today().isoformat()}
+    except Exception as exc:
+        logger.exception("/inventory GET failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Inventory fetch failed: {exc}")
+
+
+
+class InventoryItemIn(BaseModel):
+    vendor_id: str = ""
+    phone: str = ""
+    item_name: str
+    daily_stock: int
+    unit: str = "piece"
+    price_per_unit: float = 0.0
+    item_name_hi: str = ""
+
+
+@app.post("/inventory")
+def add_inventory_item(body: InventoryItemIn) -> Dict[str, Any]:
+    """Add or update an item in the vendor's daily inventory catalog."""
+    phone_key = (body.phone or body.vendor_id or "").strip() or "web-client"
+    if _is_uuid(phone_key):
+        phone_key = "web-client"
+    try:
+        row = upsert_inventory_item(
+            phone=phone_key,
+            item_name=body.item_name,
+            daily_stock=body.daily_stock,
+            unit=body.unit,
+            price_per_unit=body.price_per_unit,
+            item_name_hi=body.item_name_hi or None,
+        )
+        return {"item": row}
+    except Exception as exc:
+        logger.exception("/inventory POST failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Inventory add failed: {exc}")
+
+
+
+@app.delete("/inventory/{item_name}")
+def remove_inventory_item(item_name: str, vendor_id: str = "", phone: str = "") -> Dict[str, Any]:
+    """Soft-delete an inventory item from the vendor's catalog."""
+    phone_key = phone.strip() or vendor_id.strip() or "web-client"
+    if _is_uuid(phone_key):
+        phone_key = "web-client"
+    try:
+        delete_inventory_item(phone=phone_key, item_name=item_name)
+        return {"deleted": item_name}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Delete failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Reports Endpoint
+# ---------------------------------------------------------------------------
+
+@app.get("/api/report")
+def get_pnl_report(vendor_id: str = "", phone: str = "") -> Dict[str, str]:
+    """
+    Generate and return the URL for the Trading & P&L IT Return format PDF.
+    """
+    phone_key = phone.strip() or vendor_id.strip() or "web-client"
+    if not phone_key.startswith("whatsapp:") and _is_phone_identifier(phone_key):
+        phone_key = f"whatsapp:{phone_key}"
+    elif _is_uuid(phone_key):
+        phone_key = "web-client"
+        
+    try:
+        from services.report_generator import generate_pnl_pdf
+        # Default name, web frontend doesn't pass the profile name yet easily
+        pdf_url = generate_pnl_pdf(phone_key, vendor_name="PROPRIETOR")
+        if not pdf_url:
+            raise HTTPException(status_code=404, detail="No ledger data found to generate report.")
+        return {"pdf_url": pdf_url}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("/api/report GET failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {exc}")
+
+class InventoryResetIn(BaseModel):
+    vendor_id: str = ""
+    phone: str = ""
+
+
+@app.post("/inventory/reset")
+def reset_inventory(body: InventoryResetIn) -> Dict[str, Any]:
+    """Reset today's current_stock = daily_stock for all items. Call each morning."""
+    phone_key = (body.phone or body.vendor_id or "").strip() or "web-client"
+    if _is_uuid(phone_key):
+        phone_key = "web-client"
+    try:
+        count = reset_daily_stock(phone=phone_key)
+        return {"reset_count": count}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Reset failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Stock suggestion endpoint  (AI-powered, using VoiceTrace PS prompt logic)
 # ---------------------------------------------------------------------------
 @app.get("/suggestions")
-def get_suggestions(vendor_id: str = "", refresh: bool = False) -> Dict[str, Any]:
+def get_suggestions(
+    vendor_id: str = "",
+    vendor_name: str = "Vendor",
+    vendor_type: str = "street vendor",
+    language: str = "hi",
+    days: int = 14,
+) -> Dict[str, Any]:
     """
-    Suggest next-day stock quantities based on past sales patterns.
+    Suggest next-day stock quantities using AI (Groq LLM).
+    Falls back to a simple 15% heuristic if the AI call fails.
     """
+    settings = get_settings()
     supabase = get_supabase()
 
     try:
-        # Look at last 14 days of income entries to compute averages
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+        # Fetch recent income ledger rows
+        safe_days = max(7, min(days, 30))
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=safe_days)).isoformat()
         query = (
             supabase.table("ledger")
-            .select("amount,type,category,description,created_at")
+            .select("id,phone,amount,type,category,description,created_at")
             .eq("type", "income")
             .gte("created_at", cutoff)
             .order("created_at", desc=True)
-            .limit(200)
+            .limit(500)
         )
 
         incoming = (vendor_id or "").strip()
         if _is_phone_identifier(incoming):
             normalized = incoming if incoming.startswith("whatsapp:") else f"whatsapp:{incoming}"
             query = query.eq("phone", normalized)
-        # UUID / web frontend: no phone filter → show all entries
 
         result = query.execute()
         rows = result.data or []
 
-        # Aggregate sales by category
-        cat_daily: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
-        for row in rows:
-            try:
-                amount = float(row.get("amount") or 0)
-            except (TypeError, ValueError):
-                amount = 0.0
-            category = str(row.get("category") or "general")
-            day = str(row.get("created_at") or "")[:10]
-            cat_daily[category][day] += amount
+        # --- Try real quantity data first ---
+        item_stats = get_item_stats_from_ledger(phone_key, days=safe_days)
 
-        suggestions: List[Dict[str, Any]] = []
-        for cat, day_map in cat_daily.items():
-            total = sum(day_map.values())
-            num_days = max(len(day_map), 1)
-            avg = total / num_days
-            suggestions.append({
-                "item_name": cat,
-                "avg_daily_sold": round(avg, 0),
-                "suggested_qty": max(1, round(avg * 1.15)),  # 15% buffer
-                "total_14d": round(total, 0),
-            })
+        if not item_stats:
+            # Fallback: use ₹ amount-based aggregation from ledger
+            item_stats = aggregate_item_stats(rows, days=safe_days)
 
-        suggestions.sort(key=lambda s: s["avg_daily_sold"], reverse=True)
+        # Call the AI model with the structured prompt
+        ai_result = call_groq_for_suggestions(
+            groq_api_key=settings.groq_api_key,
+            groq_model=settings.groq_llm_model,
+            vendor_name=vendor_name,
+            vendor_type=vendor_type,
+            item_stats=item_stats,
+            language=language,
+        )
 
-        return {"suggestions": suggestions}
+        return ai_result
+
     except Exception as exc:
         logger.exception("/suggestions failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Suggestions failed: {exc}")
+
+
 
 
 @app.exception_handler(Exception)

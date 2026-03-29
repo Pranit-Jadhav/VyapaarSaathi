@@ -1,8 +1,7 @@
 import { useStore } from "../store/useStore";
-import { generatePnLPDF } from "../utils/generatePDF";
 
 export default function Profile() {
-  const { vendorId, setVendorId, checkHealth, healthStatus, loading, language, setLanguage, entries, userName } = useStore();
+  const { vendorId, setVendorId, checkHealth, healthStatus, loading, language, setLanguage, entries, userName, downloadReport } = useStore();
   const isHindi = language === "hi";
 
   return (
@@ -69,7 +68,7 @@ export default function Profile() {
                    alert(isHindi ? "कोई लेन‑देन नहीं मिला" : "No entries to export");
                    return;
                  }
-                 generatePnLPDF(entries, userName);
+                 downloadReport();
                }}
                className="text-xs font-bold text-slate-600 hover:text-slate-800 uppercase tracking-widest px-3 py-1.5 rounded-lg border border-slate-300 bg-white shadow-sm"
              >
