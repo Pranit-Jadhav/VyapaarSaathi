@@ -293,7 +293,7 @@ async def record_voice_entry(
             for entry_data in analysis.get("entries_to_save", []):
                 intent = str(entry_data.get("intent") or "ADD_ENTRY").upper()
 
-                if intent == "GET_REPORT":
+                if intent in ("GET_REPORT", "GET_INVENTORY"):
                     continue
 
                 if intent == "STOCK_UPDATE":
@@ -463,7 +463,7 @@ async def record_follow_up_answer(
             if result["status"] == "complete":
                 for entry_data in result.get("entries_to_save", []):
                     intent = str(entry_data.get("intent") or "ADD_ENTRY").upper()
-                    if intent in ("STOCK_UPDATE", "PRICE_UPDATE", "GET_REPORT"):
+                    if intent in ("STOCK_UPDATE", "PRICE_UPDATE", "GET_REPORT", "GET_INVENTORY"):
                         continue
 
                     saved = save_to_db(phone=phone_identifier, extracted_data=entry_data, audio_url="")

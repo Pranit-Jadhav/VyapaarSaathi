@@ -38,9 +38,14 @@ SUPPORTED_AUDIO_EXTENSIONS = (
     ".webm",
 )
 
+LOW_STOCK_RATIO_THRESHOLD = 0.2
+
+# In-memory state to avoid sending duplicate proactive alerts every scheduler tick.
+_stock_alert_state: Dict[str, str] = {}
+
 
 class ExtractedEntry(BaseModel):
-    intent: Literal["ADD_ENTRY", "STOCK_UPDATE", "PRICE_UPDATE", "GET_REPORT"] = "ADD_ENTRY"
+    intent: Literal["ADD_ENTRY", "STOCK_UPDATE", "PRICE_UPDATE", "GET_REPORT", "GET_INVENTORY"] = "ADD_ENTRY"
     # ADD_ENTRY fields (required for ADD_ENTRY, ignored for others)
     amount: Optional[float] = Field(default=None)
     type: Optional[Literal["income", "expense"]] = Field(default=None)
@@ -72,7 +77,7 @@ class ExtractedEntry(BaseModel):
         elif self.intent == "PRICE_UPDATE":
             if self.price_per_unit is None or self.price_per_unit <= 0:
                 raise ValueError("PRICE_UPDATE requires price_per_unit > 0")
-        elif self.intent == "GET_REPORT":
+        elif self.intent in {"GET_REPORT", "GET_INVENTORY"}:
             # No extra validation needed — just a request
             pass
         return self
@@ -268,6 +273,12 @@ def extract_json(transcript: str) -> Optional[List[Dict[str, Any]]]:
         "Examples: 'mera record do', 'mujhe mera hisaab do', 'give me my report', "
         "'mera record bhejo', 'weekly report do', 'mera hisaab kitab bhejo'\n\n"
 
+        "=== intent: GET_INVENTORY (vendor asks to see stock/inventory) ===\n"
+        "Use when vendor asks to view inventory, stock list, or available items.\n"
+        "Keys: intent (only). Set category to 'inventory'.\n"
+        "Examples: 'mujhe meri inventory dekhni hai', 'mera stock dikhao', "
+        "'kitna stock bacha hai', 'show my inventory', 'stock list bhejo'\n\n"
+
         "Return ONLY valid JSON. No explanation.\n"
     )
 
@@ -434,6 +445,7 @@ def save_to_db(phone: str, extracted_data: Dict[str, Any], audio_url: str, catal
     # Auto-deduct from inventory for ALL income entries
     # If quantity is known, use it directly. If only amount, compute qty from price.
     stockout_info = None
+    stock_alert = None
     if record.get("type") == "income":
         deduct_qty = quantity  # may be None
         category = (extracted_data.get("category") or "").lower().strip()
@@ -470,12 +482,41 @@ def save_to_db(phone: str, extracted_data: Dict[str, Any], audio_url: str, catal
             except Exception as inv_exc:
                 logger.warning("Inventory deduction failed for '%s': %s", category, inv_exc)
 
+        if stockout_info:
+            try:
+                current_stock = float(stockout_info.get("current_stock") or 0)
+            except (TypeError, ValueError):
+                current_stock = 0.0
+            try:
+                daily_stock = float(stockout_info.get("daily_stock") or 0)
+            except (TypeError, ValueError):
+                daily_stock = 0.0
+
+            ratio = (current_stock / daily_stock) if daily_stock > 0 else None
+            is_stockout = bool(stockout_info.get("stockout"))
+            is_low_stock = bool(
+                not is_stockout
+                and ratio is not None
+                and ratio <= LOW_STOCK_RATIO_THRESHOLD
+            )
+
+            if is_stockout or is_low_stock:
+                stock_alert = {
+                    "item_name": str(stockout_info.get("item_name") or category),
+                    "current_stock": current_stock,
+                    "daily_stock": daily_stock,
+                    "ratio": ratio,
+                    "stockout": is_stockout,
+                    "low_stock": is_low_stock,
+                }
+
     return {
         "entry": inserted,
         "current_profit": current_profit,
         "quantity": quantity,
         "stockout": stockout_info.get("stockout") if stockout_info else False,
         "inventory_updated": stockout_info is not None,
+        "stock_alert": stock_alert,
     }
 
 
@@ -508,11 +549,341 @@ def send_whatsapp_reply(to_phone: str, body: str, media_url: Optional[str] = Non
     return message.sid
 
 
+def _build_inventory_snapshot_message(items: List[Dict[str, Any]]) -> str:
+    """Create a concise WhatsApp-friendly inventory snapshot."""
+
+    def _fmt_number(value: Any) -> str:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return "-"
+        if number.is_integer():
+            return str(int(number))
+        return f"{number:.1f}".rstrip("0").rstrip(".")
+
+    if not items:
+        return "📦 Aapki inventory abhi khali hai. Pehle items add kijiye."
+
+    max_items = 15
+    lines = ["📦 Aapki inventory:"]
+    low_stock_lines: List[str] = []
+    stockout_lines: List[str] = []
+
+    for idx, item in enumerate(items[:max_items], start=1):
+        item_name = str(item.get("item_name_hi") or item.get("item_name") or f"item {idx}").strip()
+        unit = str(item.get("unit") or "piece")
+        current = _fmt_number(item.get("current_stock"))
+        daily = _fmt_number(item.get("daily_stock"))
+        stock_text = f"{current}/{daily} {unit}" if daily != "-" else f"{current} {unit}"
+
+        try:
+            current_num = float(item.get("current_stock") or 0)
+        except (TypeError, ValueError):
+            current_num = 0.0
+        try:
+            daily_num = float(item.get("daily_stock") or 0)
+        except (TypeError, ValueError):
+            daily_num = 0.0
+
+        if daily_num > 0:
+            ratio = current_num / daily_num
+            if current_num <= 0:
+                stockout_lines.append(f"- {item_name}: stockout (0/{int(daily_num)})")
+            elif ratio <= LOW_STOCK_RATIO_THRESHOLD:
+                pct = int(round(ratio * 100))
+                low_stock_lines.append(f"- {item_name}: {int(current_num)}/{int(daily_num)} left ({pct}%)")
+
+        price_suffix = ""
+        try:
+            price = float(item.get("price_per_unit") or 0)
+            if price > 0:
+                price_value = str(int(price)) if price.is_integer() else f"{price:.2f}".rstrip("0").rstrip(".")
+                price_suffix = f" | ₹{price_value}/{unit}"
+        except (TypeError, ValueError):
+            price_suffix = ""
+
+        lines.append(f"{idx}. {item_name} - stock {stock_text}{price_suffix}")
+
+    remaining = len(items) - max_items
+    if remaining > 0:
+        lines.append(f"... aur {remaining} items.")
+
+    if stockout_lines:
+        lines.append("\n🚨 Instant Alert: Stockout")
+        lines.extend(stockout_lines[:5])
+
+    if low_stock_lines:
+        lines.append(f"\n⚠️ Instant Alert: Low stock (<= {int(LOW_STOCK_RATIO_THRESHOLD * 100)}%)")
+        lines.extend(low_stock_lines[:5])
+
+    if not stockout_lines and not low_stock_lines:
+        lines.append("\n✅ Instant Alert: Abhi koi critical low-stock item nahi hai.")
+
+    lines.append("\nStock badhane ke liye bolo: '50 samosa stock update karo'.")
+    return "\n".join(lines)
+
+
+def _format_stock_alert_line(stock_alert: Dict[str, Any]) -> Optional[str]:
+    item_name = str(stock_alert.get("item_name") or "item").strip()
+    if not item_name:
+        item_name = "item"
+
+    try:
+        current_stock = float(stock_alert.get("current_stock") or 0)
+    except (TypeError, ValueError):
+        current_stock = 0.0
+    try:
+        daily_stock = float(stock_alert.get("daily_stock") or 0)
+    except (TypeError, ValueError):
+        daily_stock = 0.0
+
+    current_text = str(int(current_stock)) if current_stock.is_integer() else f"{current_stock:.1f}".rstrip("0").rstrip(".")
+    daily_text = str(int(daily_stock)) if daily_stock > 0 and daily_stock.is_integer() else (
+        f"{daily_stock:.1f}".rstrip("0").rstrip(".") if daily_stock > 0 else "-"
+    )
+
+    if bool(stock_alert.get("stockout")):
+        return f"🚨 {item_name}: STOCKOUT ({current_text}/{daily_text} left)"
+
+    if bool(stock_alert.get("low_stock")):
+        ratio = stock_alert.get("ratio")
+        try:
+            pct = int(round(float(ratio) * 100))
+        except (TypeError, ValueError):
+            pct = int(LOW_STOCK_RATIO_THRESHOLD * 100)
+        return f"⚠️ {item_name}: low stock {current_text}/{daily_text} left ({pct}%)"
+
+    return None
+
+
+def _inventory_alert_level(current_stock: float, daily_stock: float, units_threshold: int) -> Optional[str]:
+    if daily_stock <= 0:
+        return None
+    if current_stock <= 0:
+        return "stockout"
+    if current_stock <= units_threshold:
+        return "low_units"
+    ratio = current_stock / daily_stock
+    if ratio <= LOW_STOCK_RATIO_THRESHOLD:
+        return "low_ratio"
+    return None
+
+
+def _format_stock_monitor_line(
+    item_name: str,
+    current_stock: float,
+    daily_stock: float,
+    unit: str,
+    level: str,
+    units_threshold: int,
+) -> str:
+    current_text = str(int(current_stock)) if float(current_stock).is_integer() else f"{current_stock:.1f}".rstrip("0").rstrip(".")
+    daily_text = str(int(daily_stock)) if float(daily_stock).is_integer() else f"{daily_stock:.1f}".rstrip("0").rstrip(".")
+
+    if level == "stockout":
+        return f"- {item_name}: STOCKOUT ({current_text}/{daily_text} {unit})"
+    if level == "low_units":
+        return f"- {item_name}: low stock {current_text}/{daily_text} {unit} (<= {units_threshold})"
+    ratio = (current_stock / daily_stock) if daily_stock > 0 else 0
+    pct = int(round(ratio * 100))
+    return f"- {item_name}: low stock {current_text}/{daily_text} {unit} ({pct}%)"
+
+
+def _recent_whatsapp_recipients(days: int = 30) -> List[str]:
+    settings = get_settings()
+    explicit = [p.strip() for p in (settings.instant_stock_alert_recipients or "").split(",") if p.strip()]
+    if explicit:
+        recipients: List[str] = []
+        seen = set()
+        for phone in explicit:
+            normalized = phone if phone.startswith("whatsapp:") else f"whatsapp:{phone}"
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            recipients.append(normalized)
+        return recipients
+
+    supabase = get_supabase()
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    try:
+        rows = (
+            supabase.table("ledger")
+            .select("phone,created_at")
+            .like("phone", "whatsapp:%")
+            .gte("created_at", since)
+            .order("created_at", desc=True)
+            .limit(300)
+            .execute()
+        ).data or []
+    except Exception as exc:  # pragma: no cover - network/db path
+        logger.warning("Failed to load WhatsApp recipients for stock alerts: %s", exc)
+        return []
+
+    recipients: List[str] = []
+    seen = set()
+    for row in rows:
+        phone = str(row.get("phone") or "").strip()
+        if not phone.startswith("whatsapp:"):
+            continue
+        if phone in seen:
+            continue
+        seen.add(phone)
+        recipients.append(phone)
+    return recipients
+
+
+def run_instant_stock_alert_job() -> int:
+    """Proactively send WhatsApp alerts when inventory gets low/stockout."""
+    settings = get_settings()
+    if not settings.enable_instant_stock_alerts:
+        return 0
+
+    recipients = _recent_whatsapp_recipients()
+    if not recipients:
+        logger.info("Instant stock alert job: no recent WhatsApp recipients found.")
+        return 0
+
+    supabase = get_supabase()
+    today = date.today().isoformat()
+    units_threshold = settings.instant_stock_alert_units_threshold
+
+    try:
+        rows = (
+            supabase.table("inventory")
+            .select("item_name,item_name_hi,current_stock,daily_stock,unit,stock_date,phone")
+            .eq("stock_date", today)
+            .eq("is_active", True)
+            .eq("phone", "web-client")
+            .order("item_name")
+            .limit(1000)
+            .execute()
+        ).data or []
+    except Exception as exc:  # pragma: no cover - network/db path
+        logger.warning("Instant stock alert job failed to fetch inventory: %s", exc)
+        return 0
+
+    active_keys: set[str] = set()
+    new_alert_lines: List[str] = []
+
+    for row in rows:
+        item_name = str(row.get("item_name_hi") or row.get("item_name") or "item").strip()
+        item_key = str(row.get("item_name") or item_name).strip().lower()
+        key = f"{today}:{item_key}"
+        active_keys.add(key)
+
+        try:
+            current_stock = float(row.get("current_stock") or 0)
+        except (TypeError, ValueError):
+            current_stock = 0.0
+        try:
+            daily_stock = float(row.get("daily_stock") or 0)
+        except (TypeError, ValueError):
+            daily_stock = 0.0
+        unit = str(row.get("unit") or "piece")
+
+        level = _inventory_alert_level(current_stock, daily_stock, units_threshold)
+        if not level:
+            _stock_alert_state.pop(key, None)
+            continue
+
+        state_value = f"{level}:{int(current_stock)}:{int(daily_stock)}"
+        previous = _stock_alert_state.get(key)
+        _stock_alert_state[key] = state_value
+
+        # Alert only when newly entering alert state or stock values changed.
+        if previous == state_value:
+            continue
+
+        new_alert_lines.append(
+            _format_stock_monitor_line(
+                item_name=item_name,
+                current_stock=current_stock,
+                daily_stock=daily_stock,
+                unit=unit,
+                level=level,
+                units_threshold=units_threshold,
+            )
+        )
+
+    # Remove stale state for items not present today.
+    for existing_key in list(_stock_alert_state.keys()):
+        if existing_key.startswith(f"{today}:") and existing_key not in active_keys:
+            _stock_alert_state.pop(existing_key, None)
+
+    if not new_alert_lines:
+        return 0
+
+    unique_lines = list(dict.fromkeys(new_alert_lines))
+    body = (
+        "🚨 Instant Inventory Alert\n"
+        + "\n".join(unique_lines[:10])
+        + "\n\nReply with: '50 samosa stock update karo'"
+    )
+
+    sent_count = 0
+    for recipient in recipients:
+        try:
+            send_whatsapp_reply(recipient, body)
+            sent_count += 1
+        except Exception as exc:  # pragma: no cover - external API path
+            logger.warning("Instant stock alert send failed for %s: %s", recipient, exc)
+
+    if sent_count:
+        logger.info("Instant stock alert sent to %d recipient(s).", sent_count)
+    return sent_count
+
+
+def _looks_like_inventory_request(transcript: str) -> bool:
+    """Best-effort keyword detector for inventory view requests."""
+    text = " ".join((transcript or "").strip().lower().split())
+    if not text:
+        return False
+
+    request_markers = (
+        "inventory",
+        "inventry",
+        "stock list",
+        "stock dikha",
+        "stock dikhao",
+        "stock dekh",
+        "stock dikh",
+        "mera stock",
+        "meri inventory",
+        "mere inventory",
+        "mujhe meri inventory",
+        "mujhe mere inventory",
+        "kitna stock",
+        "stock bacha",
+        "show inventory",
+        "show my inventory",
+        "show stock",
+        "available stock",
+    )
+
+    update_or_transaction_markers = (
+        "stock update",
+        "add stock",
+        "stock badha",
+        "stock badhao",
+        "rate update",
+        "price update",
+        "bech",
+        "sold",
+        "kharch",
+    )
+
+    has_request = any(marker in text for marker in request_markers)
+    has_update_or_transaction = any(marker in text for marker in update_or_transaction_markers)
+    return has_request and not has_update_or_transaction
+
+
 def process_voice_message(phone: str, media_url: str) -> str:
     from services.conversation_engine import (
         analyze_voice_input, process_follow_up_answer, has_pending, get_pending,
     )
     from services.inventory import get_inventory
+    catalog_phone = "web-client"
 
     with tempfile.TemporaryDirectory(prefix="vyapaarsaathi-wa-") as tmp_dir:
         working_dir = Path(tmp_dir)
@@ -524,6 +895,17 @@ def process_voice_message(phone: str, media_url: str) -> str:
     if not transcript:
         return FALLBACK_RESPONSE
 
+    # Fast path: handle common inventory view commands deterministically.
+    if _looks_like_inventory_request(transcript):
+        try:
+            inventory_items = get_inventory(catalog_phone)
+            if not inventory_items:
+                inventory_items = get_inventory(phone)
+            return _build_inventory_snapshot_message(inventory_items)
+        except Exception as inv_exc:
+            logger.error("Inventory keyword path failed: %s", inv_exc)
+            return "⚠️ Inventory laane mein problem aayi. Kripya dobara try kijiye."
+
     extracted = extract_json(transcript)
     if not extracted:
         return FALLBACK_RESPONSE
@@ -531,7 +913,6 @@ def process_voice_message(phone: str, media_url: str) -> str:
     # Get inventory for conversation engine.
     # Always use the shared 'web-client' catalog so WhatsApp and web UI
     # share the same items, prices and stock levels.
-    catalog_phone = "web-client"
     try:
         inv_items = get_inventory(catalog_phone)
         if not inv_items:
@@ -561,7 +942,7 @@ def process_voice_message(phone: str, media_url: str) -> str:
             return _save_and_reply(phone, result.get("entries_to_save", []), media_url, catalog_phone=catalog_phone)
 
     # ── Fresh message — analyze against inventory ────────────────────────
-    # First handle GET_REPORT separately (not inventory-dependent)
+    # First handle command-style intents separately.
     for entry_data in extracted:
         intent = str(entry_data.get("intent") or "ADD_ENTRY").upper()
         if intent == "GET_REPORT":
@@ -581,14 +962,33 @@ def process_voice_message(phone: str, media_url: str) -> str:
                 logger.error("GET_REPORT failed: %s", report_exc)
                 return "⚠️ Report generation failed. Please try again."
 
+        if intent == "GET_INVENTORY":
+            try:
+                inventory_items = get_inventory(catalog_phone)
+                if not inventory_items:
+                    inventory_items = get_inventory(phone)
+                return _build_inventory_snapshot_message(inventory_items)
+            except Exception as inv_exc:
+                logger.error("GET_INVENTORY failed: %s", inv_exc)
+                return "⚠️ Inventory laane mein problem aayi. Kripya dobara try kijiye."
+
     # Analyze all entries against inventory
     analysis = analyze_voice_input(extracted, phone, inv_items)
 
     if analysis["status"] == "pending":
         # Send counter question — save any complete entries first
+        alert_lines: List[str] = []
         if analysis.get("entries_to_save"):
-            _save_and_reply_silent(phone, analysis["entries_to_save"], media_url, catalog_phone=catalog_phone)
+            alert_lines = _save_and_reply_silent(
+                phone,
+                analysis["entries_to_save"],
+                media_url,
+                catalog_phone=catalog_phone,
+            )
         question = analysis.get("counter_question_hi", "")
+        if alert_lines:
+            unique_alerts = list(dict.fromkeys(alert_lines))
+            return "🚨 Instant Alert:\n" + "\n".join(unique_alerts[:5]) + f"\n\n🤖 {question}"
         return f"🤖 {question}"
 
     # All complete — save everything
@@ -601,6 +1001,7 @@ def _save_and_reply(phone: str, entries: List[Dict[str, Any]], media_url: str, c
     total_expense = 0.0
     parts = []
     inventory_confirmations = []
+    stock_alert_lines: List[str] = []
     current_profit = 0.0
 
     for entry_data in entries:
@@ -639,7 +1040,7 @@ def _save_and_reply(phone: str, entries: List[Dict[str, Any]], media_url: str, c
                     logger.warning("PRICE_UPDATE failed '%s': %s", cat, inv_exc)
             continue
 
-        if intent == "GET_REPORT":
+        if intent in ("GET_REPORT", "GET_INVENTORY"):
             continue
 
         # ADD_ENTRY — save under real phone but use shared catalog for inventory ops
@@ -651,6 +1052,9 @@ def _save_and_reply(phone: str, entries: List[Dict[str, Any]], media_url: str, c
             entry_type = entry_data.get("type") or "income"
             category = entry_data.get("category", "")
             inv_updated = saved.get("inventory_updated", False)
+            stock_alert_line = _format_stock_alert_line(saved.get("stock_alert") or {})
+            if stock_alert_line:
+                stock_alert_lines.append(stock_alert_line)
 
             if entry_type == "income":
                 total_income += amount
@@ -671,6 +1075,9 @@ def _save_and_reply(phone: str, entries: List[Dict[str, Any]], media_url: str, c
         reply_parts.append(f"Current profit: {_format_inr(current_profit)}")
     if inventory_confirmations:
         reply_parts.append("🔄 Updated: " + " | ".join(inventory_confirmations))
+    if stock_alert_lines:
+        unique_alerts = list(dict.fromkeys(stock_alert_lines))
+        reply_parts.append("🚨 Instant Alert:\n" + "\n".join(unique_alerts[:5]))
 
     if not reply_parts:
         return FALLBACK_RESPONSE
@@ -678,16 +1085,21 @@ def _save_and_reply(phone: str, entries: List[Dict[str, Any]], media_url: str, c
     return "\n".join(reply_parts)
 
 
-def _save_and_reply_silent(phone: str, entries: List[Dict[str, Any]], media_url: str, catalog_phone: str = "web-client") -> None:
-    """Save entries silently (no reply generation needed — used for partial saves)."""
+def _save_and_reply_silent(phone: str, entries: List[Dict[str, Any]], media_url: str, catalog_phone: str = "web-client") -> List[str]:
+    """Save entries silently (used for partial saves) and return stock alerts."""
+    alert_lines: List[str] = []
     for entry_data in entries:
         intent = str(entry_data.get("intent") or "ADD_ENTRY").upper()
-        if intent in ("STOCK_UPDATE", "PRICE_UPDATE", "GET_REPORT"):
+        if intent in ("STOCK_UPDATE", "PRICE_UPDATE", "GET_REPORT", "GET_INVENTORY"):
             continue
         try:
-            save_to_db(phone=phone, extracted_data=entry_data, audio_url=media_url, catalog_phone=catalog_phone)
+            saved = save_to_db(phone=phone, extracted_data=entry_data, audio_url=media_url, catalog_phone=catalog_phone)
+            stock_alert_line = _format_stock_alert_line(saved.get("stock_alert") or {})
+            if stock_alert_line:
+                alert_lines.append(stock_alert_line)
         except Exception as exc:
             logger.warning("Silent save failed: %s", exc)
+    return alert_lines
 
 
 def _build_weekly_summary_message(total_income: float, total_expense: float) -> str:
@@ -794,5 +1206,6 @@ __all__ = [
     "send_whatsapp_reply",
     "is_audio_message",
     "process_voice_message",
+    "run_instant_stock_alert_job",
     "run_weekly_summary_job",
 ]

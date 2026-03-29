@@ -79,7 +79,7 @@ def analyze_voice_input(
         intent = str(entry_data.get("intent", "ADD_ENTRY")).upper()
 
         # Non-sale intents: pass through as complete
-        if intent in ("STOCK_UPDATE", "PRICE_UPDATE", "GET_REPORT"):
+        if intent in ("STOCK_UPDATE", "PRICE_UPDATE", "GET_REPORT", "GET_INVENTORY"):
             complete_entries.append(entry_data)
             continue
 

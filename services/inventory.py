@@ -407,7 +407,12 @@ def deduct_stock(phone: str, item_name: str, quantity: float) -> Optional[Dict[s
         .eq("id", matched["id"])
         .execute()
     )
-    row = (updated.data or [matched])[0]
+    # PostgREST update responses may include only changed columns.
+    # Merge with matched row to always preserve daily_stock/unit/item_name for alert logic.
+    row = dict(matched)
+    if updated.data:
+        row.update(updated.data[0])
+    row["current_stock"] = new_stock
     stockout = new_stock == 0
     logger.info(
         "Deducted %g %s of '%s'. Stock: %d → %d%s",

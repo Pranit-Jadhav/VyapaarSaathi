@@ -29,6 +29,10 @@ class Settings:
     validate_twilio_signature: bool
     enable_weekly_summary: bool
     enable_weekly_summary_tts: bool
+    enable_instant_stock_alerts: bool
+    instant_stock_alert_interval_seconds: int
+    instant_stock_alert_units_threshold: int
+    instant_stock_alert_recipients: str
 
     def missing_required(self) -> List[str]:
         missing: List[str] = []
@@ -63,6 +67,16 @@ def get_settings() -> Settings:
         validate_twilio_signature=_to_bool(os.getenv("TWILIO_VALIDATE_SIGNATURE"), default=True),
         enable_weekly_summary=_to_bool(os.getenv("ENABLE_WEEKLY_SUMMARY"), default=False),
         enable_weekly_summary_tts=_to_bool(os.getenv("ENABLE_WEEKLY_SUMMARY_TTS"), default=False),
+        enable_instant_stock_alerts=_to_bool(os.getenv("ENABLE_INSTANT_STOCK_ALERTS"), default=True),
+        instant_stock_alert_interval_seconds=max(
+            30,
+            int(os.getenv("INSTANT_STOCK_ALERT_INTERVAL_SECONDS", "60") or "60"),
+        ),
+        instant_stock_alert_units_threshold=max(
+            1,
+            int(os.getenv("INSTANT_STOCK_ALERT_UNITS_THRESHOLD", "20") or "20"),
+        ),
+        instant_stock_alert_recipients=os.getenv("INSTANT_STOCK_ALERT_RECIPIENTS", ""),
     )
 
 
